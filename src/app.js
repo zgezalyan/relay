@@ -200,8 +200,10 @@ function confirmDiscard() {
 }
 
 function refreshDerived() {
-  updateResolved();
-  updateGenerated();
+  const built = currentBuilt();
+  updateResolved(built);
+  updateGenerated(built);
+  updateCurlPreview(built);
   updateCounts();
   paintCrumb();
   paintSave();
@@ -277,9 +279,8 @@ function updateCounts() {
   document.getElementById('res-headers').textContent = headerCount ? `Headers (${headerCount})` : 'Headers';
 }
 
-function updateResolved() {
+function updateResolved(built = currentBuilt()) {
   const line = document.getElementById('resolved');
-  const built = currentBuilt();
   if (!state.draft.url.trim()) {
     line.textContent = '';
     line.className = 'resolved-line';
@@ -299,10 +300,9 @@ function updateResolved() {
   line.className = 'resolved-line';
 }
 
-function updateGenerated() {
+function updateGenerated(built = currentBuilt()) {
   const host = document.getElementById('generated-headers');
   if (!host) return;
-  const built = currentBuilt();
   host.replaceChildren();
   if (built.error) host.append(el('p', { class: 'hint is-warn', text: built.error }));
   for (const header of built.request?.headers || []) {
@@ -549,8 +549,44 @@ function renderReqPanel() {
   else if (ui.reqTab === 'headers') panel.append(renderHeaders());
   else if (ui.reqTab === 'body') panel.append(renderBody());
   else if (ui.reqTab === 'auth') panel.append(renderAuth());
+  else if (ui.reqTab === 'curl') panel.append(renderCurl());
   else panel.append(renderSettings());
-  updateGenerated();
+  const built = currentBuilt();
+  updateGenerated(built);
+  updateCurlPreview(built);
+}
+
+function renderCurl() {
+  return el('div', { class: 'curl-view', id: 'curl-preview' },
+    el('div', { class: 'curl-toolbar' },
+      el('p', { class: 'hint', text: 'Command for the open request after the active environment is applied. It uses curl.exe so PowerShell does not alias it.' }),
+      el('button', {
+        class: 'text-btn',
+        text: 'Copy',
+        'data-testid': 'curl-copy',
+        'data-action': 'copy-shown-curl',
+      }),
+    ),
+    el('div', { class: 'curl-box' },
+      el('pre', { id: 'curl-command', class: 'code-view', 'data-testid': 'curl-command' }),
+    ),
+    el('p', { id: 'curl-note', class: 'hint', 'data-testid': 'curl-note' }),
+  );
+}
+
+function updateCurlPreview(built = currentBuilt()) {
+  const command = document.getElementById('curl-command');
+  const note = document.getElementById('curl-note');
+  if (!command || !note) return;
+  const curl = RelayCore.toCurl(built);
+  command.textContent = curl || (built?.error || 'Enter a URL to see the cURL command for this request.');
+  command.classList.toggle('is-empty', !curl);
+  const notes = [];
+  if (curl && built?.error) notes.push(built.error);
+  if (curl && built?.missing?.length) notes.push(`Unresolved: ${built.missing.join(', ')}.`);
+  if (curl) notes.push(...(built?.warnings || []));
+  note.textContent = notes.join(' ');
+  note.className = notes.length ? 'hint is-warn' : 'hint';
 }
 
 function renderKv(listName, hint) {
@@ -829,6 +865,10 @@ function onTableEvent(event) {
 async function onPanelClick(event) {
   const action = event.target.closest('[data-action]');
   if (!action) return;
+  if (action.dataset.action === 'copy-shown-curl') {
+    copyCurl();
+    return;
+  }
   if (action.dataset.action === 'body-mode') {
     state.draft.bodyMode = action.dataset.mode;
     renderReqPanel();

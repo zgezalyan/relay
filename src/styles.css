@@ -286,6 +286,20 @@ textarea { width: 100%; resize: vertical; min-height: 150px; font-family: var(--
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field span { color: var(--muted); font-size: 12px; }
 .generated { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--line); }
+.curl-view { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 180px; }
+.curl-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.curl-toolbar .hint { margin: 0; flex: 1; }
+.curl-box {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  background: #101318;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.curl-box .code-view { min-height: 0; }
+.curl-box .code-view.is-empty { color: var(--muted); }
 .gen-row { font-family: var(--mono); font-size: 12px; padding: 2px 0; color: #d9d3c7; }
 .file-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .file-cell span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }

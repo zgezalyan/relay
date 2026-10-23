@@ -10,6 +10,31 @@ function draft(overrides) {
   };
 }
 
+test('cURL command includes the resolved request', () => {
+  const built = RelayCore.buildOutgoing(draft({
+    method: 'POST',
+    url: 'https://example.com/items',
+    headers: [{ key: 'X-Trace', value: '1', enabled: true }],
+    bodyMode: 'raw',
+    rawType: 'json',
+    rawBody: '{"a":1}',
+    authType: 'bearer',
+    auth: { bearerToken: 'tok' },
+    followRedirects: true,
+    insecureTLS: true,
+    timeoutMs: 5000,
+  }), Object.create(null));
+  const curl = RelayCore.toCurl(built);
+  assert.match(curl, /^curl\.exe -X POST "https:\/\/example\.com\/items"/);
+  assert.match(curl, /-L/);
+  assert.match(curl, /--insecure/);
+  assert.match(curl, /--max-time 5/);
+  assert.match(curl, /-H "Authorization: Bearer tok"/);
+  assert.match(curl, /-H "X-Trace: 1"/);
+  assert.match(curl, /--data-raw "\{\\"a\\":1\}"/);
+  assert.equal(RelayCore.toCurl({ request: { url: '' } }), '');
+});
+
 test('sample request resolves the active environment', () => {
   const workspace = RelayCore.createSampleWorkspace();
   const scope = RelayCore.buildScope(workspace.globals, workspace.environments[0]);

@@ -80,6 +80,14 @@ function exercise(base) {
 
     check(document.querySelector('[data-request-name="Get post"]'), 'sample request missing');
     check($('#resolved').textContent.includes('jsonplaceholder.typicode.com/posts/1'), $('#resolved').textContent);
+    click('[data-testid="tab-curl"]');
+    const curlText = $('[data-testid="curl-command"]').textContent;
+    check(curlText.includes('curl.exe -X GET'), curlText);
+    check(curlText.includes('https://jsonplaceholder.typicode.com/posts/1'), curlText);
+    set($('#url'), '{{baseUrl}}/posts/{{missing}}');
+    check($('[data-testid="curl-command"]').textContent.includes('{{missing}}'), $('[data-testid="curl-command"]').textContent);
+    check($('[data-testid="curl-note"]').textContent.includes('missing'), $('[data-testid="curl-note"]').textContent);
+    set($('#url'), '{{baseUrl}}/posts/1');
 
     set($('#method'), 'POST');
     set($('#url'), base + '/echo?q=1');
