@@ -41,6 +41,7 @@
     </aside>
 
     <main class="main">
+      <div id="doc-tabs" class="doc-tabs" data-testid="doc-tabs"></div>
       <section class="request-pane" id="request-pane">
         <div class="title-row">
           <div class="title-stack">
@@ -78,7 +79,7 @@
         <div id="req-panel" class="req-panel"></div>
       </section>
       <div id="splitter" class="splitter" title="Drag to resize. Double-click to reset."></div>
-      <section class="response-pane">
+      <section class="response-pane" id="response-pane">
         <div id="response-meta" class="response-meta" data-testid="response-meta"></div>
         <div class="tabs" id="res-tabs">
           <button type="button" id="res-body" data-testid="res-body" data-res="body" class="active">Body</button>
@@ -86,6 +87,24 @@
         </div>
         <div id="res-toolbar" class="res-toolbar"></div>
         <div id="response-view" class="response-view" data-testid="response"></div>
+      </section>
+      <section class="env-pane" id="env-pane" hidden>
+        <div class="title-row">
+          <div class="title-stack">
+            <input id="env-tab-name" data-testid="env-tab-name" class="request-name" data-field="env-name" spellcheck="false" autocomplete="off" />
+            <div id="env-crumb" class="crumb">Environment</div>
+          </div>
+          <div class="title-actions">
+            <button type="button" id="env-tab-use" data-testid="env-tab-use">Use</button>
+          </div>
+        </div>
+        <div id="env-tab-body" class="env-tab-body"></div>
+      </section>
+      <section class="doc-empty" id="doc-empty" hidden>
+        <div class="empty-state">
+          <h3>Nothing open</h3>
+          <p>Open a saved request or environment, or create a new one.</p>
+        </div>
       </section>
     </main>
 

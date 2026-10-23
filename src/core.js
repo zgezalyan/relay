@@ -753,6 +753,7 @@ function applyParamsToUrl(url, params) {
     }));
     let activeEnvironmentId = source.activeEnvironmentId ? String(source.activeEnvironmentId) : null;
     if (activeEnvironmentId && !environments.some((env) => env.id === activeEnvironmentId)) activeEnvironmentId = null;
+    const collections = (source.collections || []).map(sanitizeCollection).filter(Boolean);
     const history = [];
     for (const item of Array.isArray(source.history) ? source.history.slice(0, 50) : []) {
       if (!item || typeof item !== 'object' || !item.draft) continue;
@@ -772,18 +773,75 @@ function applyParamsToUrl(url, params) {
         // Ignore a broken history entry.
       }
     }
+    const documents = sanitizeDocumentTabs(source, collections, environments);
+    const activeRequest = documents.tabs.find((tab) => tab.id === documents.activeTabId && tab.kind === 'request')
+      || documents.tabs.find((tab) => tab.kind === 'request')
+      || null;
     return {
       version: 1,
       globals: { variables: sanitizeVars(source.globals?.variables) },
       environments,
       activeEnvironmentId,
-      collections: (source.collections || []).map(sanitizeCollection).filter(Boolean),
+      collections,
       history,
-      draft: source.draft ? normalizeRequest(source.draft) : null,
-      loaded: source.loaded && source.loaded.collectionId && source.loaded.requestId
-        ? { collectionId: String(source.loaded.collectionId), requestId: String(source.loaded.requestId) }
-        : null,
+      draft: activeRequest ? activeRequest.draft : (source.draft ? normalizeRequest(source.draft) : null),
+      loaded: activeRequest ? activeRequest.loaded : null,
+      tabs: documents.tabs,
+      activeTabId: documents.activeTabId,
     };
+  }
+
+  function sanitizeLoaded(loaded, collections) {
+    if (!loaded || !loaded.collectionId || !loaded.requestId) return null;
+    const collectionId = String(loaded.collectionId);
+    const requestId = String(loaded.requestId);
+    const collection = collections.find((item) => item.id === collectionId);
+    if (!collection || !collection.requests.some((request) => request.id === requestId)) return null;
+    return { collectionId, requestId };
+  }
+
+  function sanitizeDocumentTabs(source, collections, environments) {
+    const requestTabs = ['params', 'headers', 'body', 'auth', 'settings', 'curl'];
+    const envIds = new Set(environments.map((env) => env.id));
+    const tabs = [];
+    const seen = new Set();
+    const push = (tab) => {
+      let id = String(tab.id || newId());
+      if (seen.has(id)) id = newId();
+      seen.add(id);
+      tabs.push({ ...tab, id });
+    };
+    if (Array.isArray(source.tabs)) {
+      for (const tab of source.tabs) {
+        if (!tab || typeof tab !== 'object') continue;
+        if (tab.kind === 'environment') {
+          const envId = String(tab.envId || '');
+          if (!envIds.has(envId)) continue;
+          push({ id: tab.id, kind: 'environment', envId });
+          continue;
+        }
+        if (tab.kind !== 'request') continue;
+        push({
+          id: tab.id,
+          kind: 'request',
+          draft: normalizeRequest(tab.draft || createEmptyDraft()),
+          loaded: sanitizeLoaded(tab.loaded, collections),
+          reqTab: requestTabs.includes(tab.reqTab) ? tab.reqTab : 'params',
+          historyId: tab.historyId ? String(tab.historyId).slice(0, 80) : null,
+        });
+      }
+    } else {
+      push({
+        kind: 'request',
+        draft: normalizeRequest(source.draft || createEmptyDraft()),
+        loaded: sanitizeLoaded(source.loaded, collections),
+        reqTab: 'params',
+        historyId: null,
+      });
+    }
+    let activeTabId = source.activeTabId ? String(source.activeTabId) : null;
+    if (!tabs.some((tab) => tab.id === activeTabId)) activeTabId = tabs[0] ? tabs[0].id : null;
+    return { tabs, activeTabId };
   }
 
   function detectImport(data) {

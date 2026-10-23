@@ -178,3 +178,62 @@ test('Postman collections and environments import into Relay', () => {
   assert.equal(RelayCore.detectImport(workspace), 'relay');
   assert.equal(RelayCore.sanitizeWorkspace({ ...workspace, activeEnvironmentId: 'missing' }).activeEnvironmentId, null);
 });
+
+test('open tabs are restored and broken links are dropped', () => {
+  const legacy = RelayCore.sanitizeWorkspace({
+    draft: { name: 'Legacy', method: 'POST', url: 'http://example.test/legacy' },
+    loaded: null,
+    collections: [],
+    environments: [],
+  });
+  assert.equal(legacy.tabs.length, 1);
+  assert.equal(legacy.tabs[0].kind, 'request');
+  assert.equal(legacy.tabs[0].draft.name, 'Legacy');
+  assert.equal(legacy.tabs[0].draft.method, 'POST');
+  assert.equal(legacy.activeTabId, legacy.tabs[0].id);
+
+  const clean = RelayCore.sanitizeWorkspace({
+    activeTabId: 'missing-tab',
+    tabs: [
+      {
+        id: 'tab-request',
+        kind: 'request',
+        reqTab: 'body',
+        historyId: 'hist-1',
+        draft: { name: 'Kept', method: 'PUT', url: 'http://example.test/kept' },
+        loaded: { collectionId: 'col', requestId: 'req' },
+      },
+      { id: 'tab-env', kind: 'environment', envId: 'env-1' },
+      { id: 'tab-gone', kind: 'environment', envId: 'missing' },
+      {
+        id: 'tab-unsaved',
+        kind: 'request',
+        draft: { name: 'Loose', method: 'GET', url: 'http://example.test/loose' },
+        loaded: { collectionId: 'missing', requestId: 'missing' },
+      },
+    ],
+    collections: [{
+      id: 'col',
+      name: 'Demo',
+      requests: [{ id: 'req', name: 'Kept', method: 'GET', url: 'http://example.test/saved' }],
+    }],
+    environments: [{ id: 'env-1', name: 'Dev', variables: [] }],
+  });
+  assert.deepEqual(clean.tabs.map((tab) => tab.id), ['tab-request', 'tab-env', 'tab-unsaved']);
+  assert.equal(clean.activeTabId, 'tab-request');
+  assert.equal(clean.tabs[0].reqTab, 'body');
+  assert.equal(clean.tabs[0].historyId, 'hist-1');
+  assert.deepEqual(clean.tabs[0].loaded, { collectionId: 'col', requestId: 'req' });
+  assert.equal(clean.tabs[0].draft.url, 'http://example.test/kept');
+  assert.equal(clean.tabs[1].envId, 'env-1');
+  assert.equal(clean.tabs[2].loaded, null);
+  assert.equal(clean.draft.url, 'http://example.test/kept');
+
+  const again = RelayCore.sanitizeWorkspace(clean);
+  assert.deepEqual(again.tabs.map((tab) => tab.id), clean.tabs.map((tab) => tab.id));
+  assert.equal(again.activeTabId, clean.activeTabId);
+
+  const closed = RelayCore.sanitizeWorkspace({ tabs: [], draft: { name: 'Ignored', url: 'http://example.test' }, collections: [], environments: [] });
+  assert.deepEqual(closed.tabs, []);
+  assert.equal(closed.activeTabId, null);
+});

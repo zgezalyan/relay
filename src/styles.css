@@ -29,6 +29,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
@@ -155,6 +156,7 @@ button { cursor: pointer; }
 }
 .request-item:hover, .history-item:hover { background: #1b212b; }
 .request-item.is-active { background: #2a2418; }
+.request-item.is-open { box-shadow: inset 2px 0 0 var(--amber); }
 .request-label { flex: 1; }
 .row-actions { display: flex; margin-left: auto; opacity: 0; }
 .request-item:hover .row-actions,
@@ -190,8 +192,11 @@ button { cursor: pointer; }
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #161b22;
+  cursor: pointer;
 }
+.env-card input { cursor: text; }
 .env-card.is-active { border-color: #6d5528; }
+.env-card.is-current { box-shadow: inset 3px 0 0 var(--amber); }
 .env-head { gap: 4px; }
 .env-name, .env-head input[data-field="env-name"] { flex: 1; }
 .globals-card { margin: 8px; padding: 8px 8px 4px; }
@@ -216,6 +221,76 @@ button { cursor: pointer; }
 .check { width: 15px; height: 15px; margin: 0; justify-self: center; }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.doc-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 8px 0;
+  background: #0e1217;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  min-height: 40px;
+}
+.doc-tab-scroll {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--muted);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.doc-tab:hover { color: var(--text); background: #1a2029; }
+.doc-tab.is-active { background: var(--bg); color: var(--text); border-color: var(--line); }
+.doc-tab.is-active:hover { background: var(--bg); }
+.doc-tab .verb { width: auto; flex: 0 0 auto; font-size: 10px; letter-spacing: 0; }
+.doc-kind { flex: 0 0 auto; font-size: 10px; font-weight: 750; letter-spacing: 0.06em; color: var(--blue); }
+.doc-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 140px; }
+.doc-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: 0 0 auto; }
+.doc-tab-close {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  opacity: 0;
+  flex: 0 0 auto;
+}
+.doc-tab:hover .doc-tab-close,
+.doc-tab.is-active .doc-tab-close,
+.doc-tab:focus-within .doc-tab-close { opacity: 1; }
+.doc-tab-close:hover { background: #2a3140; color: var(--text); }
+.doc-tab-add {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+.doc-tab-add:hover { background: #232a35; color: var(--text); }
+.env-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.env-tab-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 20px; }
+.env-tab-body .var-table { max-width: 760px; }
+.doc-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+#env-tab-use:disabled { opacity: 0.75; cursor: default; }
 .request-pane { flex: 0 0 48%; min-height: 0; display: flex; flex-direction: column; }
 .response-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: #12161c; }
 .splitter { height: 6px; cursor: row-resize; background: #0e1217; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); flex: 0 0 auto; }

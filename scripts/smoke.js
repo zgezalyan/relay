@@ -119,6 +119,10 @@ function exercise(base) {
     window.__relay.createEnvironment('Local', [{ key: 'baseUrl', value: base }]);
     check([...$('#env-select').options].some((option) => option.textContent === 'Local'), 'environment missing');
     check($('#env-select').selectedOptions[0].textContent === 'Local', 'environment not active');
+    check(document.querySelector('[data-doc-tab][data-kind="environment"]'), 'new environment did not open a tab');
+    const requestTab = document.querySelector('[data-doc-tab][data-kind="request"]');
+    check(requestTab, 'request tab missing');
+    requestTab.click();
     set($('#method'), 'GET');
     set($('#url'), '{{baseUrl}}/echo?item=book');
     click('[data-testid="tab-body"]');
@@ -181,6 +185,29 @@ function exercise(base) {
     check(document.querySelector('[data-collection-name="Smoke collection"]'), 'saved collection missing');
     const snap = window.__relay.snapshot();
     check(snap.history >= 3, 'history ' + snap.history);
+
+    const getPost = $('[data-request-name="Get post"]');
+    click('[data-request-name="Get post"]');
+    check($('#doc-tabs [data-doc-tab].is-active').dataset.requestId === getPost.dataset.requestId, 'saved request did not become the active tab');
+    const openCount = document.querySelectorAll('[data-doc-tab]').length;
+    click('[data-request-name="Get post"]');
+    check(document.querySelectorAll('[data-doc-tab]').length === openCount, 'the same request opened twice');
+    click('#side-secondary');
+    check(document.querySelectorAll('[data-doc-tab]').length === openCount + 1, 'new request did not open a tab');
+    click('[data-side="environments"]');
+    const envCount = document.querySelectorAll('[data-doc-tab][data-kind="environment"]').length;
+    const local = [...document.querySelectorAll('.env-name')].find((node) => node.textContent === 'Local');
+    check(local, 'Local environment missing from the sidebar');
+    local.click();
+    check(document.querySelectorAll('[data-doc-tab][data-kind="environment"]').length === envCount, 'environment opened twice');
+    check($('#doc-tabs [data-doc-tab].is-active').dataset.kind === 'environment', 'environment tab is not active');
+    const saved = window.__relay.workspace();
+    check(saved.tabs.length === document.querySelectorAll('[data-doc-tab]').length, 'saved tab count ' + saved.tabs.length);
+    check(saved.tabs.some((tab) => tab.kind === 'environment' && tab.envId), 'environment tab was not saved');
+    check(saved.activeTabId === $('#doc-tabs [data-doc-tab].is-active').dataset.docTab, 'active tab was not saved');
+    window.__relay.apply(saved);
+    check(document.querySelectorAll('[data-doc-tab]').length === saved.tabs.length, 'tabs were not restored');
+    check($('#doc-tabs [data-doc-tab].is-active').dataset.docTab === saved.activeTabId, 'active tab was not restored');
     return { ok: true, history: snap.history };
   })()`;
 }

@@ -6,6 +6,8 @@ const state = {
   history: [],
   draft: null,
   loaded: null,
+  tabs: [],
+  activeTabId: null,
 };
 
 const ui = {
@@ -15,13 +17,10 @@ const ui = {
   bodyView: 'pretty',
   search: '',
   collapsed: new Set(),
-  openEnvId: null,
   editing: null,
   response: null,
   sending: false,
   inflightId: null,
-  sendGeneration: 0,
-  savedSignature: '',
   statusMessage: '',
   statusKind: '',
   persist: false,
@@ -80,9 +79,80 @@ function signatureOf(draft) {
   return JSON.stringify(RelayCore.normalizeRequest(draft));
 }
 
+function activeTab() {
+  return state.tabs.find((tab) => tab.id === state.activeTabId) || null;
+}
+
+function activeRequestTab() {
+  const tab = activeTab();
+  return tab && tab.kind === 'request' ? tab : null;
+}
+
 function isDirty() {
-  if (!state.draft) return false;
-  return signatureOf(state.draft) !== ui.savedSignature;
+  const tab = activeRequestTab();
+  if (!tab) return false;
+  return signatureOf(tab.draft) !== tab.savedSignature;
+}
+
+function requestHasContent(draft) {
+  return signatureOf(draft) !== signatureOf(RelayCore.createEmptyDraft());
+}
+
+function makeRequestTab(draft, loaded) {
+  const hydrated = RelayCore.hydrateDraft(draft || RelayCore.createEmptyDraft());
+  const link = loaded?.collectionId && loaded?.requestId
+    ? { collectionId: loaded.collectionId, requestId: loaded.requestId }
+    : null;
+  let savedSignature = signatureOf(hydrated);
+  if (link) {
+    const saved = findRequest(link.collectionId, link.requestId);
+    if (saved) savedSignature = signatureOf(saved);
+  }
+  return {
+    id: RelayCore.newId(),
+    kind: 'request',
+    draft: hydrated,
+    loaded: link,
+    response: null,
+    savedSignature,
+    reqTab: 'params',
+    sending: false,
+    inflightId: null,
+    sendGeneration: 0,
+    historyId: null,
+  };
+}
+
+function captureRequestTab() {
+  const tab = activeRequestTab();
+  if (!tab) return;
+  tab.reqTab = ui.reqTab;
+  tab.response = ui.response;
+  tab.loaded = state.loaded;
+}
+
+function showRequestTab(tab) {
+  if (!tab || tab.kind !== 'request') return;
+  state.draft = tab.draft;
+  state.loaded = tab.loaded;
+  ui.response = tab.response || null;
+  ui.reqTab = tab.reqTab || 'params';
+}
+
+function mirrorSending() {
+  const tab = activeRequestTab();
+  ui.sending = Boolean(tab?.sending);
+  ui.inflightId = tab?.inflightId || null;
+  if (document.getElementById('send-btn')) paintSendButton();
+}
+
+function focusLater(id, select) {
+  requestAnimationFrame(() => {
+    const field = document.getElementById(id);
+    if (!field || field.closest('[hidden]')) return;
+    field.focus();
+    if (select) field.select();
+  });
 }
 
 function listByName(name) {
@@ -97,7 +167,22 @@ function varList(scope, envId) {
   return findEnvironment(envId)?.variables || [];
 }
 
+function serializeTab(tab) {
+  if (tab.kind === 'environment') return { id: tab.id, kind: 'environment', envId: tab.envId };
+  return {
+    id: tab.id,
+    kind: 'request',
+    draft: RelayCore.normalizeRequest(tab.draft),
+    loaded: tab.loaded,
+    reqTab: tab.reqTab || 'params',
+    historyId: tab.historyId || null,
+  };
+}
+
 function workspacePayload() {
+  const active = activeRequestTab();
+  if (active) active.reqTab = ui.reqTab;
+  const current = active || state.tabs.find((tab) => tab.kind === 'request') || null;
   return {
     version: 1,
     globals: { variables: RelayCore.stripVars(state.globals.variables) },
@@ -116,8 +201,10 @@ function workspacePayload() {
       })),
     })),
     history: state.history.slice(0, 50),
-    draft: RelayCore.normalizeRequest(state.draft),
-    loaded: state.loaded,
+    draft: RelayCore.normalizeRequest(current ? current.draft : RelayCore.createEmptyDraft()),
+    loaded: current ? current.loaded : null,
+    tabs: state.tabs.map(serializeTab),
+    activeTabId: state.activeTabId,
   };
 }
 
@@ -128,7 +215,7 @@ function scheduleSave() {
 }
 
 async function persistNow() {
-  if (!ui.persist || !state.draft) return;
+  if (!ui.persist) return;
   const result = await window.relay.save(workspacePayload());
   if (!result?.ok) flash(result?.error || 'Could not save the workspace.', 'error');
 }
@@ -185,21 +272,54 @@ function applyWorkspace(workspace) {
   state.activeEnvironmentId = clean.activeEnvironmentId;
   state.collections = clean.collections;
   state.history = clean.history;
-  state.draft = RelayCore.hydrateDraft(clean.draft || RelayCore.createEmptyDraft());
-  state.loaded = clean.loaded;
-  if (state.loaded && !findRequest(state.loaded.collectionId, state.loaded.requestId)) state.loaded = null;
   RelayCore.ensureVarTrailing(state.globals.variables);
   for (const env of state.environments) RelayCore.ensureVarTrailing(env.variables);
-  ui.savedSignature = signatureOf(state.draft);
-  ui.openEnvId = state.activeEnvironmentId;
-}
-
-function confirmDiscard() {
-  if (!isDirty()) return true;
-  return confirm('This request has unsaved changes. Discard them?');
+  state.tabs = (clean.tabs || []).map((tab) => {
+    if (tab.kind === 'environment') return { id: tab.id, kind: 'environment', envId: tab.envId };
+    const draft = RelayCore.hydrateDraft(tab.draft);
+    const loaded = tab.loaded && findRequest(tab.loaded.collectionId, tab.loaded.requestId) ? tab.loaded : null;
+    let savedSignature = signatureOf(draft);
+    if (loaded) {
+      const saved = findRequest(loaded.collectionId, loaded.requestId);
+      if (saved) savedSignature = signatureOf(saved);
+    }
+    return {
+      id: tab.id,
+      kind: 'request',
+      draft,
+      loaded,
+      response: null,
+      savedSignature,
+      reqTab: tab.reqTab || 'params',
+      sending: false,
+      inflightId: null,
+      sendGeneration: 0,
+      historyId: tab.historyId || null,
+    };
+  });
+  state.activeTabId = state.tabs.some((tab) => tab.id === clean.activeTabId) ? clean.activeTabId : (state.tabs[0]?.id || null);
+  const active = activeRequestTab() || state.tabs.find((tab) => tab.kind === 'request');
+  if (active) {
+    state.draft = active.draft;
+    state.loaded = active.loaded;
+    ui.response = null;
+    ui.reqTab = active.reqTab || 'params';
+  } else {
+    state.draft = RelayCore.hydrateDraft(clean.draft || RelayCore.createEmptyDraft());
+    state.loaded = null;
+    ui.response = null;
+    ui.reqTab = 'params';
+  }
+  ui.sending = false;
+  ui.inflightId = null;
 }
 
 function refreshDerived() {
+  if (!state.draft) {
+    renderStatus();
+    scheduleSave();
+    return;
+  }
   const built = currentBuilt();
   updateResolved(built);
   updateGenerated(built);
@@ -207,6 +327,7 @@ function refreshDerived() {
   updateCounts();
   paintCrumb();
   paintSave();
+  renderDocTabs();
   renderStatus();
   scheduleSave();
 }
@@ -359,10 +480,132 @@ function renderAll() {
   refreshEnvSelect();
   paintSideSwitch();
   renderSidebarList();
+  renderDocTabs();
+  showDocument();
+  const tab = activeTab();
+  if (!tab) {
+    renderStatus();
+    return;
+  }
+  if (tab.kind === 'environment') {
+    renderEnvPane();
+    refreshDerived();
+    return;
+  }
   renderEditor();
 }
 
+function showDocument() {
+  const kind = activeTab()?.kind || 'empty';
+  document.getElementById('request-pane').hidden = kind !== 'request';
+  document.getElementById('splitter').hidden = kind !== 'request';
+  document.getElementById('response-pane').hidden = kind !== 'request';
+  document.getElementById('env-pane').hidden = kind !== 'environment';
+  document.getElementById('doc-empty').hidden = kind !== 'empty';
+}
+
+function paintTitle() {
+  const tab = activeTab();
+  if (!tab) {
+    document.title = 'Relay';
+    return;
+  }
+  if (tab.kind === 'environment') {
+    document.title = `${findEnvironment(tab.envId)?.name || 'Environment'} — Relay`;
+    return;
+  }
+  document.title = `${tab.draft?.name || 'Untitled request'} — Relay`;
+}
+
+function tabIsDirty(tab) {
+  return tab.kind === 'request' && signatureOf(tab.draft) !== tab.savedSignature;
+}
+
+function renderDocTabs() {
+  const host = document.getElementById('doc-tabs');
+  if (!host) return;
+  const scroll = el('div', { class: 'doc-tab-scroll', role: 'tablist', 'aria-label': 'Open documents' });
+  for (const tab of state.tabs) scroll.append(renderDocTab(tab));
+  host.replaceChildren(
+    scroll,
+    el('button', {
+      class: 'doc-tab-add',
+      text: '+',
+      title: 'New request',
+      'data-testid': 'tab-new',
+      'data-action': 'new-request-tab',
+    }),
+  );
+  paintTitle();
+}
+
+function renderDocTab(tab) {
+  const label = tab.kind === 'environment'
+    ? (findEnvironment(tab.envId)?.name || 'Environment')
+    : (tab.draft?.name || 'Untitled request');
+  const dirty = tabIsDirty(tab);
+  return el('div', {
+    class: `doc-tab${tab.id === state.activeTabId ? ' is-active' : ''}`,
+    role: 'tab',
+    tabindex: '0',
+    title: label,
+    'aria-selected': tab.id === state.activeTabId ? 'true' : 'false',
+    'data-doc-tab': tab.id,
+    'data-kind': tab.kind,
+    'data-request-id': tab.kind === 'request' ? (tab.loaded?.requestId || '') : '',
+    'data-testid': 'doc-tab',
+  },
+    tab.kind === 'environment'
+      ? el('span', { class: 'doc-kind', text: 'ENV' })
+      : el('span', { class: `verb ${tab.draft?.method || 'GET'}`, text: tab.draft?.method || 'GET' }),
+    el('span', { class: 'doc-tab-label', text: label }),
+    dirty ? el('span', { class: 'doc-dirty', title: 'Unsaved changes' }) : null,
+    el('button', {
+      class: 'doc-tab-close',
+      text: '✕',
+      title: 'Close',
+      'aria-label': `Close ${label}`,
+      'data-close-tab': tab.id,
+    }),
+  );
+}
+
+function paintEnvUse() {
+  const button = document.getElementById('env-tab-use');
+  const crumb = document.getElementById('env-crumb');
+  const tab = activeTab();
+  if (!button || !tab || tab.kind !== 'environment') return;
+  const inUse = tab.envId === state.activeEnvironmentId;
+  button.textContent = inUse ? 'In use' : 'Use';
+  button.disabled = inUse;
+  button.className = inUse ? 'text-btn' : 'save-btn';
+  if (crumb) crumb.textContent = inUse ? 'Active environment' : 'Environment';
+}
+
+function renderEnvPane() {
+  const tab = activeTab();
+  const body = document.getElementById('env-tab-body');
+  const name = document.getElementById('env-tab-name');
+  if (!tab || tab.kind !== 'environment' || !body || !name) return;
+  const env = findEnvironment(tab.envId);
+  if (!env) {
+    name.value = '';
+    name.dataset.envId = '';
+    body.replaceChildren(el('div', { class: 'empty-state' }, el('h3', { text: 'This environment is no longer available.' })));
+    paintEnvUse();
+    return;
+  }
+  name.dataset.envId = env.id;
+  name.value = env.name;
+  paintEnvUse();
+  body.replaceChildren(
+    el('p', { class: 'hint', text: 'These variables override globals with the same name while this environment is active.' }),
+    renderVarTable(env.variables, 'env', env.id),
+  );
+}
+
 function renderEditor() {
+  if (!state.draft) return;
   document.getElementById('request-name').value = state.draft.name;
   document.getElementById('method').value = state.draft.method;
   document.getElementById('url').value = state.draft.url;
@@ -371,7 +614,6 @@ function renderEditor() {
   renderReqPanel();
   renderResponse();
   refreshDerived();
-  document.title = `${state.draft.name || 'Untitled request'} — Relay`;
 }
 
 function renderSidebarList() {
@@ -440,10 +682,15 @@ function renderCollections() {
 }
 
 function renderRequestRow(collection, request) {
-  const active = state.loaded?.collectionId === collection.id && state.loaded?.requestId === request.id;
+  const open = state.tabs.find((tab) => (
+    tab.kind === 'request'
+    && tab.loaded?.collectionId === collection.id
+    && tab.loaded?.requestId === request.id
+  ));
+  const active = Boolean(open) && open.id === state.activeTabId;
   const editing = ui.editing?.kind === 'request' && ui.editing.id === request.id;
   return el('div', {
-    class: `request-item${active ? ' is-active' : ''}`,
+    class: `request-item${active ? ' is-active' : ''}${open ? ' is-open' : ''}`,
     'data-request-id': request.id,
     'data-collection-id': collection.id,
     'data-request-name': request.name,
@@ -476,6 +723,7 @@ function renderEnvironments() {
     el('p', { class: 'hint', text: 'Available in every request. The active environment overrides the same name.' }),
     renderVarTable(state.globals.variables, 'globals', ''),
   ));
+  wrap.append(el('p', { class: 'hint side-hint', text: 'Click an environment to edit it in a tab. Use makes it active for requests.' }));
   const envs = state.environments.filter((env) => (
     matches(query, env.name, ...env.variables.map((variable) => `${variable.key} ${variable.value}`))
   ));
@@ -485,15 +733,14 @@ function renderEnvironments() {
 }
 
 function renderEnvCard(env) {
-  const open = ui.openEnvId === env.id;
   const active = env.id === state.activeEnvironmentId;
+  const current = activeTab()?.kind === 'environment' && activeTab().envId === env.id;
   const editing = ui.editing?.kind === 'environment' && ui.editing.id === env.id;
-  return el('section', { class: `env-card${active ? ' is-active' : ''}` },
+  return el('section', { class: `env-card${active ? ' is-active' : ''}${current ? ' is-current' : ''}`, 'data-env-id': env.id },
     el('div', { class: 'env-head' },
-      el('button', { class: 'icon-btn', text: open ? '▾' : '▸', title: 'Expand', 'data-action': 'toggle-env', 'data-env-id': env.id }),
       editing
         ? el('input', { class: 'rename-input', 'data-field': 'env-name', 'data-env-id': env.id, 'data-autofocus': 'true', value: env.name, spellcheck: 'false' })
-        : el('span', { class: 'env-name', text: env.name }),
+        : el('span', { class: 'env-name', text: env.name, title: 'Open' }),
       el('button', { class: 'text-btn', text: active ? 'In use' : 'Use', 'data-action': 'use-env', 'data-env-id': env.id }),
       el('span', { class: 'row-actions' },
         el('button', { class: 'icon-btn', text: '✎', title: 'Rename', 'data-action': 'rename-env', 'data-env-id': env.id }),
@@ -501,7 +748,6 @@ function renderEnvCard(env) {
         el('button', { class: 'icon-btn danger', text: '✕', title: 'Delete', 'data-action': 'delete-env', 'data-env-id': env.id }),
       ),
     ),
-    open ? renderVarTable(env.variables, 'env', env.id) : null,
   );
 }
 
@@ -923,36 +1169,110 @@ function onUrlInput() {
   refreshDerived();
 }
 
-function loadDraft(draft, loaded, response) {
-  state.draft = RelayCore.hydrateDraft(draft);
-  state.loaded = loaded;
-  ui.response = response;
-  ui.savedSignature = signatureOf(state.draft);
-  renderEditor();
-  renderSidebarList();
+function activateTab(id) {
+  const next = state.tabs.find((tab) => tab.id === id);
+  if (!next || next.id === state.activeTabId) return;
+  captureRequestTab();
+  state.activeTabId = next.id;
+  if (next.kind === 'request') showRequestTab(next);
+  mirrorSending();
+  renderAll();
+  scheduleSave();
+  requestAnimationFrame(() => {
+    document.querySelector('#doc-tabs .doc-tab.is-active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
 }
 
-function loadRequest(collectionId, requestId) {
-  if (state.loaded?.collectionId === collectionId && state.loaded?.requestId === requestId) return;
-  if (!confirmDiscard()) return;
+function confirmCloseTab(tab) {
+  if (tab.kind !== 'request') return true;
+  const name = tab.draft.name || 'Untitled request';
+  if (signatureOf(tab.draft) !== tab.savedSignature) {
+    return confirm(`“${name}” has unsaved changes. Close it anyway?`);
+  }
+  const keptInHistory = tab.historyId && state.history.some((item) => item.id === tab.historyId);
+  if (!tab.loaded && !keptInHistory && requestHasContent(tab.draft)) {
+    return confirm(`Close “${name}”? It is not saved in a collection.`);
+  }
+  return true;
+}
+
+function closeTab(id, { force = false } = {}) {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0) return false;
+  const tab = state.tabs[index];
+  if (!force && !confirmCloseTab(tab)) return false;
+  const wasActive = state.activeTabId === id;
+  state.tabs.splice(index, 1);
+  if (wasActive) {
+    const neighbor = state.tabs[index] || state.tabs[index - 1] || null;
+    state.activeTabId = neighbor ? neighbor.id : null;
+    if (neighbor?.kind === 'request') showRequestTab(neighbor);
+    else if (!neighbor) {
+      state.loaded = null;
+      ui.response = null;
+    }
+    mirrorSending();
+  }
+  renderAll();
+  scheduleSave();
+  return true;
+}
+
+function closeTabsWhere(predicate) {
+  const ids = state.tabs.filter(predicate).map((tab) => tab.id);
+  for (const id of ids) closeTab(id, { force: true });
+  return ids.length;
+}
+
+function openRequestTab(collectionId, requestId) {
+  const existing = state.tabs.find((tab) => (
+    tab.kind === 'request'
+    && tab.loaded?.collectionId === collectionId
+    && tab.loaded?.requestId === requestId
+  ));
+  if (existing) {
+    if (existing.id !== state.activeTabId) activateTab(existing.id);
+    return existing;
+  }
   const request = findRequest(collectionId, requestId);
-  if (!request) return;
-  loadDraft(request, { collectionId, requestId }, null);
+  if (!request) return null;
+  const tab = makeRequestTab(request, { collectionId, requestId });
+  state.tabs.push(tab);
+  activateTab(tab.id);
+  return tab;
+}
+
+function openNewRequestTab(draft, loaded) {
+  const tab = makeRequestTab(draft, loaded);
+  state.tabs.push(tab);
+  activateTab(tab.id);
+  return tab;
+}
+
+function openEnvironmentTab(envId, { focusName = false } = {}) {
+  if (!findEnvironment(envId)) return null;
+  let tab = state.tabs.find((item) => item.kind === 'environment' && item.envId === envId);
+  if (!tab) {
+    tab = { id: RelayCore.newId(), kind: 'environment', envId };
+    state.tabs.push(tab);
+  }
+  if (tab.id !== state.activeTabId) activateTab(tab.id);
+  if (focusName) focusLater('env-tab-name', true);
+  return tab;
 }
 
 function newRequest() {
-  if (!confirmDiscard()) return;
-  loadDraft(RelayCore.createEmptyDraft(), null, null);
-  scheduleSave();
+  openNewRequestTab(RelayCore.createEmptyDraft(), null);
+  focusLater('url');
 }
 
 function addBlankRequest(collectionId) {
-  if (!confirmDiscard()) return;
   const collection = findCollection(collectionId);
   if (!collection) return;
   const request = { id: RelayCore.newId(), ...RelayCore.normalizeRequest({ ...RelayCore.createEmptyDraft(), name: 'New request' }) };
   collection.requests.push(request);
-  loadDraft(request, { collectionId, requestId: request.id }, null);
+  openRequestTab(collectionId, request.id);
+  focusLater('request-name', true);
 }
 
 function addCollection(name, { edit = false } = {}) {
@@ -964,32 +1284,38 @@ function addCollection(name, { edit = false } = {}) {
 }
 
 function saveInPlace() {
-  if (!state.loaded) {
+  const tab = activeRequestTab();
+  if (!tab) return;
+  if (!tab.loaded) {
     openSaveModal();
     return;
   }
-  const collection = findCollection(state.loaded.collectionId);
-  const request = collection?.requests.find((item) => item.id === state.loaded.requestId);
+  const collection = findCollection(tab.loaded.collectionId);
+  const request = collection?.requests.find((item) => item.id === tab.loaded.requestId);
   if (!collection || !request) {
+    tab.loaded = null;
     state.loaded = null;
     openSaveModal();
     return;
   }
-  const normalized = RelayCore.normalizeRequest(state.draft);
+  const normalized = RelayCore.normalizeRequest(tab.draft);
   const id = request.id;
   Object.keys(request).forEach((key) => { if (key !== 'id') delete request[key]; });
   Object.assign(request, normalized, { id });
-  ui.savedSignature = signatureOf(state.draft);
+  tab.savedSignature = signatureOf(tab.draft);
+  state.loaded = tab.loaded;
   renderSidebarList();
   refreshDerived();
   flash('Saved.');
 }
 
 function openSaveModal() {
-  const name = el('input', { id: 'modal-request-name', 'data-testid': 'modal-request-name', value: state.draft.name || 'Untitled request', spellcheck: 'false' });
+  const tab = activeRequestTab();
+  if (!tab) return;
+  const name = el('input', { id: 'modal-request-name', 'data-testid': 'modal-request-name', value: tab.draft.name || 'Untitled request', spellcheck: 'false' });
   const select = el('select', { id: 'modal-collection', 'data-testid': 'modal-collection' });
   for (const collection of state.collections) select.append(new Option(collection.name, collection.id));
-  if (state.loaded?.collectionId) select.value = state.loaded.collectionId;
+  if (tab.loaded?.collectionId) select.value = tab.loaded.collectionId;
   const created = el('input', { id: 'modal-new-collection', 'data-testid': 'modal-new-collection', placeholder: 'New collection name', spellcheck: 'false' });
   const error = el('p', { class: 'form-error' });
   openModal({
@@ -1009,12 +1335,13 @@ function openSaveModal() {
         error.textContent = 'Choose a collection or enter a new name.';
         return false;
       }
-      state.draft.name = requestName;
+      tab.draft.name = requestName;
       document.getElementById('request-name').value = requestName;
-      const request = { id: RelayCore.newId(), ...RelayCore.normalizeRequest(state.draft) };
+      const request = { id: RelayCore.newId(), ...RelayCore.normalizeRequest(tab.draft) };
       collection.requests.push(request);
-      state.loaded = { collectionId: collection.id, requestId: request.id };
-      ui.savedSignature = signatureOf(state.draft);
+      tab.loaded = { collectionId: collection.id, requestId: request.id };
+      state.loaded = tab.loaded;
+      tab.savedSignature = signatureOf(tab.draft);
       ui.editing = null;
       renderSidebarList();
       refreshDerived();
@@ -1031,9 +1358,9 @@ function duplicateRequest(collectionId, requestId) {
   const index = collection.requests.indexOf(request);
   const copy = withFreshRowIds(RelayCore.normalizeRequest(request));
   copy.name = `${request.name} copy`;
-  collection.requests.splice(index + 1, 0, { id: RelayCore.newId(), ...copy });
-  renderSidebarList();
-  scheduleSave();
+  const created = { id: RelayCore.newId(), ...copy };
+  collection.requests.splice(index + 1, 0, created);
+  openRequestTab(collection.id, created.id);
 }
 
 function deleteRequest(collectionId, requestId) {
@@ -1042,9 +1369,10 @@ function deleteRequest(collectionId, requestId) {
   if (!request) return;
   if (!confirm(`Delete “${request.name}”?`)) return;
   collection.requests = collection.requests.filter((item) => item.id !== requestId);
-  if (state.loaded?.collectionId === collectionId && state.loaded?.requestId === requestId) {
-    loadDraft(RelayCore.createEmptyDraft(), null, null);
-  } else renderSidebarList();
+  const closed = closeTabsWhere((tab) => (
+    tab.kind === 'request' && tab.loaded?.collectionId === collectionId && tab.loaded?.requestId === requestId
+  ));
+  if (!closed) renderSidebarList();
   scheduleSave();
 }
 
@@ -1052,8 +1380,8 @@ function deleteCollection(id) {
   const collection = findCollection(id);
   if (!collection || !confirm(`Delete “${collection.name}” and its requests?`)) return;
   state.collections = state.collections.filter((item) => item.id !== id);
-  if (state.loaded?.collectionId === id) loadDraft(RelayCore.createEmptyDraft(), null, null);
-  else renderSidebarList();
+  const closed = closeTabsWhere((tab) => tab.kind === 'request' && tab.loaded?.collectionId === id);
+  if (!closed) renderSidebarList();
   scheduleSave();
 }
 
@@ -1072,7 +1400,7 @@ function duplicateCollection(id) {
   scheduleSave();
 }
 
-function createEnvironment(name, variables, { edit = false, activate = true } = {}) {
+function createEnvironment(name, variables, { edit = false, activate = true, open = true } = {}) {
   const env = {
     id: RelayCore.newId(),
     name: name || 'New environment',
@@ -1087,11 +1415,13 @@ function createEnvironment(name, variables, { edit = false, activate = true } = 
   RelayCore.ensureVarTrailing(env.variables);
   state.environments.push(env);
   if (activate) state.activeEnvironmentId = env.id;
-  ui.openEnvId = env.id;
-  if (edit) ui.editing = { kind: 'environment', id: env.id };
-  refreshEnvSelect();
-  if (ui.side === 'environments') renderSidebarList();
-  refreshDerived();
+  if (open) openEnvironmentTab(env.id, { focusName: edit });
+  else {
+    refreshEnvSelect();
+    if (ui.side === 'environments') renderSidebarList();
+    refreshDerived();
+    scheduleSave();
+  }
   return env.id;
 }
 
@@ -1099,7 +1429,6 @@ function duplicateEnvironment(id) {
   const env = findEnvironment(id);
   if (!env) return;
   createEnvironment(`${env.name} copy`, RelayCore.stripVars(env.variables), { activate: false });
-  renderSidebarList();
 }
 
 function deleteEnvironment(id) {
@@ -1107,20 +1436,31 @@ function deleteEnvironment(id) {
   if (!env || !confirm(`Delete environment “${env.name}”?`)) return;
   state.environments = state.environments.filter((item) => item.id !== id);
   if (state.activeEnvironmentId === id) state.activeEnvironmentId = null;
-  if (ui.openEnvId === id) ui.openEnvId = state.activeEnvironmentId;
-  refreshEnvSelect();
-  renderSidebarList();
-  refreshDerived();
+  const closed = closeTabsWhere((tab) => tab.kind === 'environment' && tab.envId === id);
+  if (!closed) {
+    refreshEnvSelect();
+    renderSidebarList();
+    refreshDerived();
+  }
+  scheduleSave();
 }
 
 function loadHistory(id) {
   const item = state.history.find((entry) => entry.id === id);
-  if (!item?.draft || !confirmDiscard()) return;
-  loadDraft(item.draft, null, null);
+  if (!item?.draft) return;
+  const existing = state.tabs.find((tab) => tab.kind === 'request' && tab.historyId === id);
+  if (existing) {
+    if (existing.id !== state.activeTabId) activateTab(existing.id);
+    return;
+  }
+  const tab = makeRequestTab(item.draft, null);
+  tab.historyId = id;
+  state.tabs.push(tab);
+  activateTab(tab.id);
 }
 
-function pushHistory(built, result) {
-  const snapshot = RelayCore.normalizeRequest(state.draft);
+function pushHistory(built, result, draft) {
+  const snapshot = RelayCore.normalizeRequest(draft || state.draft);
   if (snapshot.rawBody.length > 100000) snapshot.rawBody = `${snapshot.rawBody.slice(0, 100000)}\n… truncated in history`;
   state.history.unshift({
     id: RelayCore.newId(),
@@ -1137,14 +1477,17 @@ function pushHistory(built, result) {
 }
 
 async function sendCurrent() {
-  if (ui.sending) {
-    await window.relay.cancel(ui.inflightId);
+  const tab = activeRequestTab();
+  if (!tab) return { error: 'Open a request to send.', cancelled: true };
+  if (tab.sending) {
+    await window.relay.cancel(tab.inflightId);
     return { error: 'Cancelled', cancelled: true };
   }
   const built = currentBuilt();
   refreshDerived();
   if (!built.ok) {
-    ui.response = { error: built.error, warnings: built.warnings, missing: built.missing };
+    tab.response = { error: built.error, warnings: built.warnings, missing: built.missing };
+    ui.response = tab.response;
     renderResponse();
     return ui.response;
   }
@@ -1152,31 +1495,35 @@ async function sendCurrent() {
     const proceed = confirm(`These variables are not defined: ${built.missing.join(', ')}.\n\nSend the request anyway?`);
     if (!proceed) return { error: 'Cancelled', cancelled: true };
   }
-  const generation = ++ui.sendGeneration;
-  ui.sending = true;
-  ui.inflightId = RelayCore.newId();
-  paintSendButton();
+  const generation = (tab.sendGeneration || 0) + 1;
+  tab.sendGeneration = generation;
+  tab.sending = true;
+  tab.inflightId = RelayCore.newId();
+  mirrorSending();
   renderStatus();
   try {
-    const result = await window.relay.send({ requestId: ui.inflightId, ...built.request });
-    if (generation !== ui.sendGeneration) return result;
-    ui.response = {
+    const result = await window.relay.send({ requestId: tab.inflightId, ...built.request });
+    if (tab.sendGeneration !== generation || !state.tabs.includes(tab)) return result;
+    tab.response = {
       ...result,
       warnings: [...built.warnings, ...(result?.warnings || [])],
       missing: built.missing,
       requestUrl: built.request.url,
     };
-    if (!result?.cancelled) pushHistory(built, result || {});
-    renderResponse();
+    if (!result?.cancelled) pushHistory(built, result || {}, tab.draft);
+    if (activeRequestTab() === tab) ui.response = tab.response;
+    if (activeRequestTab() === tab) renderResponse();
     if (ui.side === 'history') renderSidebarList();
     scheduleSave();
-    return ui.response;
+    return tab.response;
   } finally {
-    if (generation === ui.sendGeneration) {
-      ui.sending = false;
-      ui.inflightId = null;
-      paintSendButton();
-      renderStatus();
+    if (tab.sendGeneration === generation) {
+      tab.sending = false;
+      tab.inflightId = null;
+      if (activeRequestTab() === tab) {
+        mirrorSending();
+        renderStatus();
+      }
     }
   }
 }
@@ -1317,12 +1664,8 @@ async function onImport() {
     RelayCore.ensureVarTrailing(imported.environment.variables);
     state.environments.push(imported.environment);
     if (!state.activeEnvironmentId) state.activeEnvironmentId = imported.environment.id;
-    ui.openEnvId = imported.environment.id;
     ui.side = 'environments';
-    paintSideSwitch();
-    refreshEnvSelect();
-    renderSidebarList();
-    refreshDerived();
+    openEnvironmentTab(imported.environment.id);
     flash(`Imported environment “${imported.environment.name}”.`);
     return;
   }
@@ -1400,15 +1743,11 @@ function handleSideAction(action) {
     case 'delete-request':
       deleteRequest(collectionId, requestId);
       break;
-    case 'toggle-env':
-      ui.openEnvId = ui.openEnvId === envId ? null : envId;
-      renderSidebarList();
-      break;
     case 'use-env':
       state.activeEnvironmentId = envId;
-      ui.openEnvId = envId;
       refreshEnvSelect();
       renderSidebarList();
+      paintEnvUse();
       refreshDerived();
       break;
     case 'rename-env':
@@ -1427,6 +1766,9 @@ function handleSideAction(action) {
       if (index >= 0) rows.splice(index, 1);
       RelayCore.ensureVarTrailing(rows);
       renderSidebarList();
+      if (action.dataset.scope === 'env' && activeTab()?.kind === 'environment' && activeTab().envId === action.dataset.envId) {
+        renderEnvPane();
+      }
       refreshDerived();
       break;
     }
@@ -1452,20 +1794,35 @@ function onSideInput(event) {
   if (field === 'request-name') {
     const request = findRequest(target.dataset.collectionId, target.dataset.requestId);
     if (request) request.name = target.value;
-    if (state.loaded?.requestId === target.dataset.requestId) {
-      state.draft.name = target.value;
+    for (const tab of state.tabs) {
+      if (tab.kind !== 'request' || tab.loaded?.collectionId !== target.dataset.collectionId || tab.loaded?.requestId !== target.dataset.requestId) continue;
+      tab.draft.name = target.value;
+      const saved = findRequest(target.dataset.collectionId, target.dataset.requestId);
+      if (saved && signatureOf(tab.draft) === signatureOf(saved)) tab.savedSignature = signatureOf(tab.draft);
+    }
+    const current = activeRequestTab();
+    if (current?.loaded?.collectionId === target.dataset.collectionId && current.loaded?.requestId === target.dataset.requestId) {
       document.getElementById('request-name').value = target.value;
       paintCrumb();
     }
+    renderDocTabs();
     scheduleSave();
     return;
   }
   if (field === 'env-name') {
     const env = findEnvironment(target.dataset.envId);
-    if (env) env.name = target.value;
+    if (!env) return;
+    env.name = target.value;
     refreshEnvSelect();
-    scheduleSave();
+    const sideLabel = document.querySelector(`#side-list [data-env-id="${CSS.escape(env.id)}"] .env-name`);
+    if (sideLabel && sideLabel !== target) sideLabel.textContent = target.value;
+    const tabName = document.getElementById('env-tab-name');
+    if (tabName && tabName !== target && activeTab()?.kind === 'environment' && activeTab().envId === env.id) {
+      tabName.value = target.value;
+    }
+    renderDocTabs();
     renderStatus();
+    scheduleSave();
     return;
   }
   const host = target.closest('[data-var-id]');
@@ -1529,11 +1886,16 @@ function bindEvents() {
     if (event.target.closest('input, textarea, select')) return;
     const request = event.target.closest('[data-request-id]');
     if (request) {
-      loadRequest(request.dataset.collectionId, request.dataset.requestId);
+      openRequestTab(request.dataset.collectionId, request.dataset.requestId);
       return;
     }
     const history = event.target.closest('[data-history-id]');
-    if (history) loadHistory(history.dataset.historyId);
+    if (history) {
+      loadHistory(history.dataset.historyId);
+      return;
+    }
+    const envCard = event.target.closest('[data-env-id]');
+    if (envCard?.dataset.envId) openEnvironmentTab(envCard.dataset.envId);
   });
   sideList.addEventListener('input', onSideInput);
   sideList.addEventListener('change', onSideInput);
@@ -1546,18 +1908,19 @@ function bindEvents() {
   });
   document.getElementById('env-select').addEventListener('change', (event) => {
     state.activeEnvironmentId = event.target.value || null;
-    ui.openEnvId = state.activeEnvironmentId;
     if (ui.side === 'environments') renderSidebarList();
+    paintEnvUse();
     refreshDerived();
   });
   document.getElementById('save-btn').addEventListener('click', saveInPlace);
   document.getElementById('save-as-btn').addEventListener('click', openSaveModal);
   document.getElementById('copy-curl').addEventListener('click', copyCurl);
   document.getElementById('request-name').addEventListener('input', (event) => {
+    if (!state.draft) return;
     state.draft.name = event.target.value;
-    document.title = `${state.draft.name || 'Untitled request'} — Relay`;
     paintCrumb();
     paintSave();
+    renderDocTabs();
     renderStatus();
     scheduleSave();
   });
@@ -1577,6 +1940,8 @@ function bindEvents() {
     const tab = event.target.closest('[data-tab]');
     if (!tab) return;
     ui.reqTab = tab.dataset.tab;
+    const current = activeRequestTab();
+    if (current) current.reqTab = ui.reqTab;
     paintTabs();
     renderReqPanel();
   });
@@ -1600,6 +1965,46 @@ function bindEvents() {
     else if (action.dataset.action === 'save-response') saveResponse();
   });
   document.getElementById('send-btn').addEventListener('click', () => sendCurrent());
+  const envPane = document.getElementById('env-pane');
+  envPane.addEventListener('input', onSideInput);
+  envPane.addEventListener('change', onSideInput);
+  envPane.addEventListener('click', (event) => {
+    const action = event.target.closest('[data-action]');
+    if (action) handleSideAction(action);
+  });
+  document.getElementById('env-tab-use').addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'environment') return;
+    state.activeEnvironmentId = tab.envId;
+    refreshEnvSelect();
+    if (ui.side === 'environments') renderSidebarList();
+    paintEnvUse();
+    refreshDerived();
+  });
+  const docTabs = document.getElementById('doc-tabs');
+  docTabs.addEventListener('click', (event) => {
+    const close = event.target.closest('[data-close-tab]');
+    if (close) {
+      closeTab(close.dataset.closeTab);
+      return;
+    }
+    if (event.target.closest('[data-action="new-request-tab"]')) {
+      newRequest();
+      return;
+    }
+    const tab = event.target.closest('[data-doc-tab]');
+    if (tab) activateTab(tab.dataset.docTab);
+  });
+  docTabs.addEventListener('mousedown', (event) => {
+    if (event.button === 1) event.preventDefault();
+  });
+  docTabs.addEventListener('auxclick', (event) => {
+    if (event.button !== 1) return;
+    const tab = event.target.closest('[data-doc-tab]');
+    if (!tab) return;
+    event.preventDefault();
+    closeTab(tab.dataset.docTab);
+  });
   document.getElementById('beautify-open').addEventListener('click', openBeautifier);
   document.getElementById('import-btn').addEventListener('click', onImport);
   document.getElementById('export-btn').addEventListener('click', onExport);
@@ -1632,13 +2037,24 @@ function bindEvents() {
       event.preventDefault();
       saveInPlace();
     }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') {
+      event.preventDefault();
+      if (!document.getElementById('modal-back') && state.activeTabId) closeTab(state.activeTabId);
+    }
+    if (event.ctrlKey && event.key === 'Tab' && state.tabs.length > 1 && !document.getElementById('modal-back')) {
+      event.preventDefault();
+      const index = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
+      const direction = event.shiftKey ? -1 : 1;
+      const next = state.tabs[(index + direction + state.tabs.length) % state.tabs.length];
+      if (next) activateTab(next.id);
+    }
     if (!typing && event.key === '/' ) {
       event.preventDefault();
       document.getElementById('side-search').focus();
     }
   });
   window.addEventListener('beforeunload', () => {
-    if (!ui.persist || !state.draft) return;
+    if (!ui.persist) return;
     try { window.relay.saveSync(workspacePayload()); } catch { /* the debounced save already covers most edits */ }
   });
 }
@@ -1648,6 +2064,11 @@ window.__relay = {
   get bootError() { return ui.bootError; },
   send: () => sendCurrent(),
   createEnvironment: (name, variables) => createEnvironment(name, variables),
+  workspace: () => workspacePayload(),
+  apply: (data) => {
+    applyWorkspace(data);
+    renderAll();
+  },
   snapshot: () => ({
     collections: state.collections.map((collection) => ({
       name: collection.name,

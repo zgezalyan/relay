@@ -23,7 +23,8 @@ The first launch opens a sample collection and a JSONPlaceholder environment. Ev
 - Add auth as a bearer token, basic auth, or an API key in a header or the query string.
 - Set a timeout (1–180 seconds, 30 by default), follow redirects, and optionally accept invalid TLS certificates.
 - Organize requests in collections. Search, rename, duplicate, and delete collections and requests.
-- Keep global variables and named environments. The active environment overrides a global with the same name.
+- Open each request or environment in its own tab. Click a saved one, or create a new one, and it opens in a new tab. Tabs you leave open are restored the next time Relay starts.
+- Keep global variables and named environments. The active environment overrides a global with the same name. Click an environment in the sidebar to edit its variables.
 - Browse the last 50 sent requests and reopen any of them.
 - Copy a request as a `curl.exe` command, and copy or save a response.
 - Beautify or minify JSON in a request body, or from the **JSON** button in the header.
@@ -51,6 +52,8 @@ Built-in values:
 | Ctrl+Enter | Send, or cancel the request in flight |
 | Enter in the URL field | Send |
 | Ctrl+S | Save the request into its collection |
+| Ctrl+W | Close the current tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Switch to the next or previous tab |
 | `/` | Focus the sidebar search (when not typing in a field) |
 | Esc | Close the open dialog |
 | F12 | Toggle developer tools |
@@ -59,7 +62,7 @@ Drag the splitter between the request and response to resize them. Double-click 
 
 ## Data
 
-The workspace is saved as `workspace.json` in Relay’s Electron user data folder. On Windows that is `%APPDATA%\Relay`. Edits are written shortly after you make them, and again when the window closes.
+The workspace is saved as `workspace.json` in Relay’s Electron user data folder. On Windows that is `%APPDATA%\Relay`. Edits are written shortly after you make them, and again when the window closes. Open tabs are part of that file, including requests that are not in a collection yet.
 
 If that file cannot be parsed, Relay copies it to `workspace.json.corrupt` and opens a fresh sample workspace.
 
