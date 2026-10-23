@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Relay</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Relay</span>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="text-btn" id="beautify-open" data-testid="beautify-open">JSON</button>
+        <button type="button" class="text-btn" id="import-btn" data-testid="import-btn">Import</button>
+        <button type="button" class="text-btn" id="export-btn" data-testid="export-btn">Export</button>
+        <label class="env-picker">
+          <span>Environment</span>
+          <select id="env-select" data-testid="env-select"></select>
+        </label>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="side-switch" role="tablist">
+        <button type="button" data-side="collections" class="active">Collections</button>
+        <button type="button" data-side="environments">Environments</button>
+        <button type="button" data-side="history">History</button>
+      </div>
+      <div class="side-tools">
+        <input id="side-search" data-testid="side-search" type="search" placeholder="Search collections" spellcheck="false" />
+        <div class="side-tool-row">
+          <button type="button" id="side-primary" data-testid="side-primary">New collection</button>
+          <button type="button" id="side-secondary" data-testid="side-secondary">New request</button>
+        </div>
+      </div>
+      <div id="side-list" class="side-list"></div>
+    </aside>
+
+    <main class="main">
+      <section class="request-pane" id="request-pane">
+        <div class="title-row">
+          <div class="title-stack">
+            <input id="request-name" data-testid="request-name" class="request-name" spellcheck="false" autocomplete="off" />
+            <div id="crumb" class="crumb" data-testid="crumb"></div>
+          </div>
+          <div class="title-actions">
+            <button type="button" class="text-btn" id="copy-curl" data-testid="copy-curl">Copy cURL</button>
+            <button type="button" class="text-btn" id="save-as-btn" data-testid="save-as-btn">Save as</button>
+            <button type="button" class="save-btn" id="save-btn" data-testid="save-btn">Save</button>
+          </div>
+        </div>
+        <div class="url-row">
+          <select id="method" data-testid="method" class="method-select" data-method="GET">
+            <option>GET</option>
+            <option>POST</option>
+            <option>PUT</option>
+            <option>PATCH</option>
+            <option>DELETE</option>
+            <option>HEAD</option>
+            <option>OPTIONS</option>
+          </select>
+          <input id="url" data-testid="url" class="url-input" spellcheck="false" autocomplete="off" placeholder="https://api.example.com/{{resource}}" />
+          <button type="button" id="send-btn" data-testid="send-btn" class="send-btn" title="Send (Ctrl+Enter)">Send</button>
+        </div>
+        <div id="resolved" class="resolved-line" data-testid="resolved"></div>
+        <div class="tabs" id="req-tabs">
+          <button type="button" id="tab-params" data-testid="tab-params" data-tab="params" class="active">Params</button>
+          <button type="button" id="tab-headers" data-testid="tab-headers" data-tab="headers">Headers</button>
+          <button type="button" id="tab-body" data-testid="tab-body" data-tab="body">Body</button>
+          <button type="button" id="tab-auth" data-testid="tab-auth" data-tab="auth">Auth</button>
+          <button type="button" id="tab-settings" data-testid="tab-settings" data-tab="settings">Settings</button>
+        </div>
+        <div id="req-panel" class="req-panel"></div>
+      </section>
+      <div id="splitter" class="splitter" title="Drag to resize. Double-click to reset."></div>
+      <section class="response-pane">
+        <div id="response-meta" class="response-meta" data-testid="response-meta"></div>
+        <div class="tabs" id="res-tabs">
+          <button type="button" id="res-body" data-testid="res-body" data-res="body" class="active">Body</button>
+          <button type="button" id="res-headers" data-testid="res-headers" data-res="headers">Headers</button>
+        </div>
+        <div id="res-toolbar" class="res-toolbar"></div>
+        <div id="response-view" class="response-view" data-testid="response"></div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-left">Saved locally</span>
+      <span id="status-right"></span>
+    </footer>
+  </div>
+  <div id="modal-root"></div>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
