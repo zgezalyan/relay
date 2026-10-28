@@ -29,6 +29,8 @@ const ui = {
 };
 
 let flashTimer = 0;
+let tabDrag = null;
+let docTabsNeedRender = false;
 
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
@@ -522,6 +524,10 @@ function tabIsDirty(tab) {
 }
 
 function renderDocTabs() {
+  if (tabDrag) {
+    docTabsNeedRender = true;
+    return;
+  }
   const host = document.getElementById('doc-tabs');
   if (!host) return;
   const scroll = el('div', { class: 'doc-tab-scroll', role: 'tablist', 'aria-label': 'Open documents' });
@@ -568,6 +574,132 @@ function renderDocTab(tab) {
       'data-close-tab': tab.id,
     }),
   );
+}
+
+function onTabPointerDown(event) {
+  if (tabDrag || event.button !== 0) return;
+  const origin = event.target instanceof Element ? event.target : event.target?.parentElement;
+  if (!origin) return;
+  const tabEl = origin.closest('[data-doc-tab]');
+  if (!tabEl || origin.closest('[data-close-tab]')) return;
+  const scroll = tabEl.parentElement;
+  if (!scroll) return;
+  tabDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    clientX: event.clientX,
+    moved: false,
+    el: tabEl,
+    scroll,
+    order: [...scroll.querySelectorAll('[data-doc-tab]')],
+    scrollFrame: 0,
+  };
+  window.addEventListener('pointermove', onTabPointerMove);
+  window.addEventListener('pointerup', onTabPointerEnd);
+  window.addEventListener('pointercancel', onTabPointerEnd);
+  try { tabEl.setPointerCapture(event.pointerId); } catch { /* untrusted pointers cannot be captured */ }
+}
+
+function onTabPointerMove(event) {
+  if (!tabDrag || event.pointerId !== tabDrag.pointerId) return;
+  tabDrag.clientX = event.clientX;
+  if (!tabDrag.moved) {
+    const dx = event.clientX - tabDrag.startX;
+    const dy = event.clientY - tabDrag.startY;
+    if (dx * dx + dy * dy < 16) return;
+    tabDrag.moved = true;
+    tabDrag.el.classList.add('is-dragging');
+    document.body.classList.add('is-tab-dragging');
+    const step = () => {
+      if (!tabDrag?.moved) return;
+      nudgeTabScroll();
+      placeDraggedTab(tabDrag.clientX);
+      tabDrag.scrollFrame = requestAnimationFrame(step);
+    };
+    tabDrag.scrollFrame = requestAnimationFrame(step);
+  }
+  placeDraggedTab(event.clientX);
+  event.preventDefault();
+}
+
+function nudgeTabScroll() {
+  const scroll = tabDrag?.scroll;
+  if (!scroll || tabDrag.clientX == null) return;
+  const bounds = scroll.getBoundingClientRect();
+  const edge = 32;
+  if (tabDrag.clientX < bounds.left + edge) scroll.scrollLeft -= 14;
+  else if (tabDrag.clientX > bounds.right - edge) scroll.scrollLeft += 14;
+}
+
+function placeDraggedTab(clientX) {
+  const scroll = tabDrag?.scroll;
+  if (!scroll) return;
+  const tabs = [...scroll.querySelectorAll('.doc-tab')].filter((node) => node !== tabDrag.el);
+  let before = null;
+  for (const node of tabs) {
+    const rect = node.getBoundingClientRect();
+    if (clientX < rect.left + rect.width / 2) {
+      before = node;
+      break;
+    }
+  }
+  if (tabDrag.el.nextElementSibling !== before) scroll.insertBefore(tabDrag.el, before);
+}
+
+function onTabPointerEnd(event) {
+  finishTabDrag(event, event.type === 'pointercancel');
+}
+
+function finishTabDrag(event, restore) {
+  if (!tabDrag) return;
+  if (event && event.pointerId !== tabDrag.pointerId) return;
+  const session = tabDrag;
+  tabDrag = null;
+  window.removeEventListener('pointermove', onTabPointerMove);
+  window.removeEventListener('pointerup', onTabPointerEnd);
+  window.removeEventListener('pointercancel', onTabPointerEnd);
+  cancelAnimationFrame(session.scrollFrame);
+  session.el.classList.remove('is-dragging');
+  document.body.classList.remove('is-tab-dragging');
+  try {
+    if (session.el.hasPointerCapture(session.pointerId)) session.el.releasePointerCapture(session.pointerId);
+  } catch { /* pointer was not captured */ }
+  if (restore && session.scroll) {
+    for (const node of session.order) session.scroll.append(node);
+    session.moved = false;
+  }
+  if (session.moved) {
+    applyDraggedTabOrder(session.scroll);
+    const swallow = (clickEvent) => {
+      clickEvent.preventDefault();
+      clickEvent.stopPropagation();
+      document.removeEventListener('click', swallow, true);
+    };
+    document.addEventListener('click', swallow, true);
+    setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+  }
+  if (docTabsNeedRender) {
+    docTabsNeedRender = false;
+    renderDocTabs();
+  }
+}
+
+function applyDraggedTabOrder(scroll) {
+  if (!scroll) return;
+  const ids = [...scroll.querySelectorAll('[data-doc-tab]')].map((node) => node.dataset.docTab);
+  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+  const next = [];
+  for (const id of ids) {
+    const tab = byId.get(id);
+    if (tab) next.push(tab);
+  }
+  for (const tab of state.tabs) {
+    if (!next.includes(tab)) next.push(tab);
+  }
+  if (next.length === state.tabs.length && next.every((tab, index) => tab === state.tabs[index])) return;
+  state.tabs = next;
+  scheduleSave();
 }
 
 function paintEnvUse() {
@@ -1982,6 +2114,7 @@ function bindEvents() {
     refreshDerived();
   });
   const docTabs = document.getElementById('doc-tabs');
+  docTabs.addEventListener('pointerdown', onTabPointerDown);
   docTabs.addEventListener('click', (event) => {
     const close = event.target.closest('[data-close-tab]');
     if (close) {
@@ -2028,6 +2161,11 @@ function bindEvents() {
   splitter.addEventListener('dblclick', () => { requestPane.style.flexBasis = '48%'; });
   document.addEventListener('keydown', (event) => {
     const typing = event.target.matches('input, textarea, select');
+    if (event.key === 'Escape' && tabDrag) {
+      event.preventDefault();
+      finishTabDrag(null, true);
+      return;
+    }
     if (event.key === 'Escape' && document.getElementById('modal-back')) closeModal();
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();

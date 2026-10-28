@@ -208,6 +208,40 @@ function exercise(base) {
     window.__relay.apply(saved);
     check(document.querySelectorAll('[data-doc-tab]').length === saved.tabs.length, 'tabs were not restored');
     check($('#doc-tabs [data-doc-tab].is-active').dataset.docTab === saved.activeTabId, 'active tab was not restored');
+    const orderBefore = [...document.querySelectorAll('#doc-tabs [data-doc-tab]')].map((node) => node.dataset.docTab);
+    check(orderBefore.length >= 2, 'need two tabs to reorder');
+    const activeBefore = $('#doc-tabs [data-doc-tab].is-active').dataset.docTab;
+    const first = document.querySelector('#doc-tabs [data-doc-tab]');
+    const box = first.getBoundingClientRect();
+    const fire = (type, x, y, target) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+        clientX: x,
+        clientY: y,
+      }));
+    };
+    const x0 = box.left + box.width / 2;
+    const y0 = box.top + box.height / 2;
+    fire('pointerdown', x0, y0, first);
+    fire('pointermove', x0 + 12, y0, window);
+    fire('pointermove', 4000, y0, window);
+    fire('pointerup', 4000, y0, window);
+    const orderAfter = [...document.querySelectorAll('#doc-tabs [data-doc-tab]')].map((node) => node.dataset.docTab);
+    check(orderAfter[orderAfter.length - 1] === orderBefore[0], 'drag did not move the first tab to the end');
+    check(orderAfter[0] === orderBefore[1], 'tabs did not shift after drag');
+    check($('#doc-tabs [data-doc-tab].is-active').dataset.docTab === activeBefore, 'dragging changed the active tab');
+    const dragged = window.__relay.workspace();
+    check(dragged.tabs.map((tab) => tab.id).join(',') === orderAfter.join(','), 'tab order was not saved');
+    window.__relay.apply(dragged);
+    const restoredOrder = [...document.querySelectorAll('#doc-tabs [data-doc-tab]')].map((node) => node.dataset.docTab);
+    check(restoredOrder.join(',') === orderAfter.join(','), 'tab order was not restored');
     return { ok: true, history: snap.history };
   })()`;
 }

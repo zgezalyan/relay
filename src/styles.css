@@ -252,10 +252,21 @@ button { cursor: pointer; }
   color: var(--muted);
   flex: 0 0 auto;
   min-width: 0;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
 .doc-tab:hover { color: var(--text); background: #1a2029; }
 .doc-tab.is-active { background: var(--bg); color: var(--text); border-color: var(--line); }
 .doc-tab.is-active:hover { background: var(--bg); }
+.doc-tab.is-dragging {
+  cursor: grabbing;
+  opacity: 0.92;
+  z-index: 1;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+body.is-tab-dragging,
+body.is-tab-dragging .doc-tab { cursor: grabbing; }
 .doc-tab .verb { width: auto; flex: 0 0 auto; font-size: 10px; letter-spacing: 0; }
 .doc-kind { flex: 0 0 auto; font-size: 10px; font-weight: 750; letter-spacing: 0.06em; color: var(--blue); }
 .doc-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 140px; }
@@ -270,6 +281,7 @@ button { cursor: pointer; }
   padding: 0;
   opacity: 0;
   flex: 0 0 auto;
+  cursor: pointer;
 }
 .doc-tab:hover .doc-tab-close,
 .doc-tab.is-active .doc-tab-close,
