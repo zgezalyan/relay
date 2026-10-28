@@ -1,7 +1,7 @@
 {
   "name": "relay",
   "productName": "Relay",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Relay is a light Windows desktop HTTP client with collections, environments, and a JSON beautifier.",
   "main": "electron-main.js",
   "private": true,
