@@ -208,6 +208,57 @@ function exercise(base) {
     window.__relay.apply(saved);
     check(document.querySelectorAll('[data-doc-tab]').length === saved.tabs.length, 'tabs were not restored');
     check($('#doc-tabs [data-doc-tab].is-active').dataset.docTab === saved.activeTabId, 'active tab was not restored');
+    click('[data-side="collections"]');
+    const fireAt = (type, x, y, target, pointerId) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+        clientX: x,
+        clientY: y,
+      }));
+    };
+    const dragRow = async (row, x, y) => {
+      const from = row.getBoundingClientRect();
+      const x0 = from.left + Math.min(36, from.width / 2);
+      const y0 = from.top + from.height / 2;
+      fireAt('pointerdown', x0, y0, row, 3);
+      fireAt('pointermove', x0, y0 + 14, window, 3);
+      fireAt('pointermove', x, y, window, 3);
+      fireAt('pointerup', x, y, window, 3);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    };
+    const exampleOf = () => [...document.querySelectorAll('.collection')].find((node) => node.querySelector('[data-collection-name="Example"]'));
+    let example = exampleOf();
+    check(example, 'Example collection missing');
+    const getBox = example.querySelector('[data-request-name="Get post"]').getBoundingClientRect();
+    await dragRow(example.querySelector('[data-request-name="Create post"]'), getBox.left + 40, getBox.top + 3);
+    example = exampleOf();
+    const rootNames = [...example.querySelectorAll(':scope > .collection-body > [data-request-name]')].map((node) => node.dataset.requestName);
+    check(rootNames[0] === 'Create post' && rootNames[1] === 'Get post', 'requests did not reorder: ' + rootNames.join(', '));
+    example.querySelector(':scope > .collection-head [data-action="add-folder"]').click();
+    set($('[data-field="folder-name"]'), 'Auth');
+    $('[data-field="folder-name"]').blur();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const folderHead = [...document.querySelectorAll('.folder-head')].find((node) => node.querySelector('[data-folder-name="Auth"]'));
+    check(folderHead, 'Auth folder missing');
+    const nameBox = folderHead.querySelector('.folder-name').getBoundingClientRect();
+    await dragRow(document.querySelector('[data-request-name="Get post"]'), nameBox.left + nameBox.width / 2, nameBox.top + nameBox.height / 2);
+    const authFolder = [...document.querySelectorAll('.folder')].find((node) => node.querySelector('[data-folder-name="Auth"]'));
+    check(authFolder?.querySelector('[data-request-name="Get post"]'), 'request was not dropped into the folder');
+    const stored = window.__relay.workspace().collections.find((collection) => collection.name === 'Example');
+    const auth = stored.items.find((item) => item.kind === 'folder' && item.name === 'Auth');
+    check(auth?.items.some((item) => item.name === 'Get post'), 'folder contents were not saved');
+    check(stored.items.some((item) => item.name === 'Create post'), 'reordered request was lost');
+    window.__relay.apply(window.__relay.workspace());
+    const restoredFolder = [...document.querySelectorAll('.folder')].find((node) => node.querySelector('[data-folder-name="Auth"]'));
+    check(restoredFolder?.querySelector('[data-request-name="Get post"]'), 'folder was not restored');
+    click('[data-side="collections"]');
     const orderBefore = [...document.querySelectorAll('#doc-tabs [data-doc-tab]')].map((node) => node.dataset.docTab);
     check(orderBefore.length >= 2, 'need two tabs to reorder');
     const activeBefore = $('#doc-tabs [data-doc-tab].is-active').dataset.docTab;

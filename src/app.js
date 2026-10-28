@@ -31,6 +31,8 @@ const ui = {
 let flashTimer = 0;
 let tabDrag = null;
 let docTabsNeedRender = false;
+let requestDrag = null;
+let sideListNeedRender = false;
 
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
@@ -57,7 +59,142 @@ function findCollection(id) {
 }
 
 function findRequest(collectionId, requestId) {
-  return findCollection(collectionId)?.requests.find((request) => request.id === requestId) || null;
+  const collection = findCollection(collectionId);
+  if (!collection) return null;
+  return walkItems(collection.items, (item) => (item.id === requestId ? item : null));
+}
+
+function walkItems(items, visit) {
+  for (const item of items || []) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.kind === 'folder') {
+      const found = walkItems(item.items, visit);
+      if (found) return found;
+    } else {
+      const found = visit(item);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function flatRequests(collection) {
+  const requests = [];
+  walkItems(collection?.items, (item) => {
+    requests.push(item);
+    return null;
+  });
+  return requests;
+}
+
+function countRequests(items) {
+  let count = 0;
+  for (const item of items || []) {
+    if (item?.kind === 'folder') count += countRequests(item.items);
+    else if (item) count += 1;
+  }
+  return count;
+}
+
+function findFolder(collection, folderId) {
+  if (!collection || !folderId) return null;
+  const stack = [...(collection.items || [])];
+  while (stack.length) {
+    const item = stack.pop();
+    if (!item || item.kind !== 'folder') continue;
+    if (item.id === folderId) return item;
+    stack.push(...(item.items || []));
+  }
+  return null;
+}
+
+function parentList(collection, parentFolderId) {
+  if (!collection) return null;
+  if (!Array.isArray(collection.items)) collection.items = [];
+  if (!parentFolderId) return collection.items;
+  const folder = findFolder(collection, parentFolderId);
+  if (!folder) return null;
+  if (!Array.isArray(folder.items)) folder.items = [];
+  return folder.items;
+}
+
+function locateRequest(collection, requestId) {
+  function walk(items) {
+    for (let index = 0; index < (items || []).length; index += 1) {
+      const item = items[index];
+      if (item?.kind === 'folder') {
+        const nested = walk(item.items);
+        if (nested) return nested;
+      } else if (item?.id === requestId) return { items, index, item };
+    }
+    return null;
+  }
+  return walk(collection?.items);
+}
+
+function folderPath(collection, requestId) {
+  function walk(items, trail) {
+    for (const item of items || []) {
+      if (item?.kind === 'folder') {
+        const found = walk(item.items, [...trail, item.name]);
+        if (found) return found;
+      } else if (item?.id === requestId) return trail;
+    }
+    return null;
+  }
+  return walk(collection?.items, []) || [];
+}
+
+function folderChoices(collection) {
+  const options = [{ id: '', label: 'Collection root' }];
+  function walk(items, prefix) {
+    for (const item of items || []) {
+      if (item?.kind !== 'folder') continue;
+      const label = prefix ? `${prefix} / ${item.name}` : item.name;
+      options.push({ id: item.id, label });
+      walk(item.items, label);
+    }
+  }
+  walk(collection?.items, '');
+  return options;
+}
+
+function folderIdOfRequest(collection, requestId) {
+  function walk(items, parentId) {
+    for (const item of items || []) {
+      if (item?.kind === 'folder') {
+        const found = walk(item.items, item.id);
+        if (found != null) return found;
+      } else if (item?.id === requestId) return parentId;
+    }
+    return null;
+  }
+  const found = walk(collection?.items, '');
+  return found == null ? '' : found;
+}
+
+function cloneItems(items) {
+  return (items || []).map((item) => {
+    if (item?.kind === 'folder') {
+      return { kind: 'folder', id: RelayCore.newId(), name: item.name, items: cloneItems(item.items) };
+    }
+    return { id: RelayCore.newId(), ...withFreshRowIds(RelayCore.normalizeRequest(item)) };
+  });
+}
+
+function folderGlyph() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('class', 'glyph');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M1.8 4.2h4.1l1.3 1.4H14.2V12.6H1.8V4.2z');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.3');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.append(path);
+  return svg;
 }
 
 function findEnvironment(id) {
@@ -169,6 +306,15 @@ function varList(scope, envId) {
   return findEnvironment(envId)?.variables || [];
 }
 
+function serializeItems(items) {
+  return (items || []).map((item) => {
+    if (item?.kind === 'folder') {
+      return { kind: 'folder', id: item.id, name: item.name, items: serializeItems(item.items) };
+    }
+    return { id: item.id, ...RelayCore.normalizeRequest(item) };
+  });
+}
+
 function serializeTab(tab) {
   if (tab.kind === 'environment') return { id: tab.id, kind: 'environment', envId: tab.envId };
   return {
@@ -197,10 +343,7 @@ function workspacePayload() {
     collections: state.collections.map((collection) => ({
       id: collection.id,
       name: collection.name,
-      requests: collection.requests.map((request) => ({
-        id: request.id,
-        ...RelayCore.normalizeRequest(request),
-      })),
+      items: serializeItems(collection.items),
     })),
     history: state.history.slice(0, 50),
     draft: RelayCore.normalizeRequest(current ? current.draft : RelayCore.createEmptyDraft()),
@@ -364,9 +507,10 @@ function paintCrumb() {
     return;
   }
   const collection = findCollection(state.loaded.collectionId);
-  crumb.textContent = collection
-    ? `${collection.name}  /  ${state.draft.name || 'Untitled request'}`
-    : (state.draft.name || 'Untitled request');
+  const path = collection
+    ? [collection.name, ...folderPath(collection, state.loaded.requestId), state.draft.name || 'Untitled request']
+    : [state.draft.name || 'Untitled request'];
+  crumb.textContent = path.join('  /  ');
 }
 
 function paintSendButton() {
@@ -749,6 +893,10 @@ function renderEditor() {
 }
 
 function renderSidebarList() {
+  if (requestDrag) {
+    sideListNeedRender = true;
+    return;
+  }
   const host = document.getElementById('side-list');
   host.replaceChildren();
   if (ui.side === 'collections') host.append(renderCollections());
@@ -762,14 +910,14 @@ function renderCollections() {
   const query = ui.search;
   let shown = 0;
   for (const collection of state.collections) {
+    const queryText = query.trim();
     const nameMatch = matches(query, collection.name);
-    const requests = collection.requests.filter((request) => (
-      nameMatch || matches(query, request.name, request.method, request.url)
-    ));
-    if (!nameMatch && requests.length === 0) continue;
+    const collapsed = ui.collapsed.has(collection.id) && !queryText;
+    const rendered = collapsed
+      ? { node: document.createDocumentFragment(), shown: 0 }
+      : renderItemList(collection, collection.items || [], '', query, nameMatch);
+    if (queryText && !nameMatch && !rendered.shown) continue;
     shown += 1;
-    const visibleRequests = nameMatch && !query.trim() ? collection.requests : (nameMatch ? collection.requests : requests);
-    const collapsed = ui.collapsed.has(collection.id) && !query.trim();
     const head = el('div', { class: 'collection-head' },
       el('button', {
         class: 'icon-btn',
@@ -788,21 +936,32 @@ function renderCollections() {
           spellcheck: 'false',
         })
         : el('span', { class: 'collection-name', 'data-collection-name': collection.name, text: collection.name }),
-      el('span', { class: 'collection-count', text: String(collection.requests.length) }),
+      el('span', { class: 'collection-count', text: String(countRequests(collection.items)) }),
       el('span', { class: 'row-actions' },
+        el('button', {
+          class: 'icon-btn',
+          title: 'New folder',
+          'aria-label': 'New folder',
+          'data-action': 'add-folder',
+          'data-collection-id': collection.id,
+        }, folderGlyph()),
         el('button', { class: 'icon-btn', text: '+', title: 'New request in this collection', 'data-action': 'add-request', 'data-collection-id': collection.id }),
         el('button', { class: 'icon-btn', text: '✎', title: 'Rename', 'data-action': 'rename-collection', 'data-collection-id': collection.id }),
         el('button', { class: 'icon-btn', text: '⧉', title: 'Duplicate', 'data-action': 'duplicate-collection', 'data-collection-id': collection.id }),
         el('button', { class: 'icon-btn danger', text: '✕', title: 'Delete', 'data-action': 'delete-collection', 'data-collection-id': collection.id }),
       ),
     );
-    const block = el('section', { class: 'collection' }, head);
+    const body = el('div', {
+      class: 'collection-body',
+      'data-drop-parent': '',
+      'data-collection-id': collection.id,
+      'data-drop-index': String((collection.items || []).length),
+    });
     if (!collapsed) {
-      const rows = nameMatch ? collection.requests : visibleRequests;
-      for (const request of rows) block.append(renderRequestRow(collection, request));
-      if (!rows.length) block.append(el('div', { class: 'hint', text: 'No requests yet.' }));
+      body.append(rendered.node);
+      if (!rendered.shown) body.append(el('div', { class: 'hint', text: 'No requests yet.' }));
     }
-    wrap.append(block);
+    wrap.append(el('section', { class: 'collection', 'data-collection-id': collection.id }, head, collapsed ? null : body));
   }
   if (!shown) {
     wrap.append(el('div', { class: 'empty-state' },
@@ -813,7 +972,93 @@ function renderCollections() {
   return wrap;
 }
 
-function renderRequestRow(collection, request) {
+function renderItemList(collection, items, parentFolderId, query, ancestorMatch) {
+  const frag = document.createDocumentFragment();
+  let shown = 0;
+  items.forEach((item, index) => {
+    if (!item) return;
+    if (item.kind === 'folder') {
+      const collapsed = ui.collapsed.has(item.id) && !query.trim();
+      const nameMatch = ancestorMatch || matches(query, item.name);
+      const children = collapsed
+        ? { node: document.createDocumentFragment(), shown: 0 }
+        : renderItemList(collection, item.items || [], item.id, query, nameMatch);
+      if (!ancestorMatch && query.trim() && !matches(query, item.name) && !children.shown) return;
+      shown += 1;
+      frag.append(renderFolder(collection, item, parentFolderId, index, children.node, collapsed));
+      return;
+    }
+    if (!ancestorMatch && query.trim() && !matches(query, item.name, item.method, item.url)) return;
+    shown += 1;
+    frag.append(renderRequestRow(collection, item, parentFolderId, index));
+  });
+  return { node: frag, shown };
+}
+
+function renderFolder(collection, folder, parentFolderId, index, childNode, collapsed) {
+  const editing = ui.editing?.kind === 'folder' && ui.editing.id === folder.id;
+  const head = el('div', {
+    class: 'folder-head',
+    'data-folder-id': folder.id,
+    'data-collection-id': collection.id,
+    'data-parent-folder-id': parentFolderId || '',
+    'data-index': String(index),
+  },
+    el('button', {
+      class: 'icon-btn',
+      text: collapsed ? '▸' : '▾',
+      title: 'Collapse',
+      'data-action': 'toggle-folder',
+      'data-collection-id': collection.id,
+      'data-folder-id': folder.id,
+    }),
+    editing
+      ? el('input', {
+        class: 'rename-input',
+        'data-field': 'folder-name',
+        'data-collection-id': collection.id,
+        'data-folder-id': folder.id,
+        'data-autofocus': 'true',
+        value: folder.name,
+        spellcheck: 'false',
+      })
+      : el('span', { class: 'folder-name', 'data-folder-name': folder.name, text: folder.name }),
+    el('span', { class: 'collection-count', text: String(countRequests(folder.items)) }),
+    el('span', { class: 'row-actions' },
+      el('button', {
+        class: 'icon-btn',
+        title: 'New folder',
+        'aria-label': 'New folder',
+        'data-action': 'add-folder',
+        'data-collection-id': collection.id,
+        'data-folder-id': folder.id,
+      }, folderGlyph()),
+      el('button', {
+        class: 'icon-btn',
+        text: '+',
+        title: 'New request in this folder',
+        'data-action': 'add-request',
+        'data-collection-id': collection.id,
+        'data-folder-id': folder.id,
+      }),
+      el('button', { class: 'icon-btn', text: '✎', title: 'Rename', 'data-action': 'rename-folder', 'data-collection-id': collection.id, 'data-folder-id': folder.id }),
+      el('button', { class: 'icon-btn', text: '⧉', title: 'Duplicate', 'data-action': 'duplicate-folder', 'data-collection-id': collection.id, 'data-folder-id': folder.id }),
+      el('button', { class: 'icon-btn danger', text: '✕', title: 'Delete', 'data-action': 'delete-folder', 'data-collection-id': collection.id, 'data-folder-id': folder.id }),
+    ),
+  );
+  if (collapsed) return el('div', { class: 'folder' }, head);
+  const empty = childNode.childNodes.length === 0;
+  const body = el('div', {
+    class: 'folder-body',
+    'data-drop-parent': folder.id,
+    'data-collection-id': collection.id,
+    'data-drop-index': String((folder.items || []).length),
+  }, childNode);
+  if (empty) body.append(el('div', { class: 'folder-empty', text: 'Empty' }));
+  return el('div', { class: 'folder' }, head, body);
+}
+
+function renderRequestRow(collection, request, parentFolderId, index) {
   const open = state.tabs.find((tab) => (
     tab.kind === 'request'
     && tab.loaded?.collectionId === collection.id
@@ -825,6 +1070,8 @@ function renderRequestRow(collection, request) {
     class: `request-item${active ? ' is-active' : ''}${open ? ' is-open' : ''}`,
     'data-request-id': request.id,
     'data-collection-id': collection.id,
+    'data-parent-folder-id': parentFolderId || '',
+    'data-index': String(index),
     'data-request-name': request.name,
   },
     el('span', { class: `verb ${request.method}`, text: request.method }),
@@ -1398,17 +1645,34 @@ function newRequest() {
   focusLater('url');
 }
 
-function addBlankRequest(collectionId) {
+function addBlankRequest(collectionId, folderId) {
   const collection = findCollection(collectionId);
-  if (!collection) return;
+  const list = parentList(collection, folderId || '');
+  if (!list) return;
   const request = { id: RelayCore.newId(), ...RelayCore.normalizeRequest({ ...RelayCore.createEmptyDraft(), name: 'New request' }) };
-  collection.requests.push(request);
+  list.push(request);
+  if (folderId) ui.collapsed.delete(folderId);
+  ui.collapsed.delete(collectionId);
   openRequestTab(collectionId, request.id);
   focusLater('request-name', true);
 }
 
+function addFolder(collectionId, parentFolderId) {
+  const collection = findCollection(collectionId);
+  const list = parentList(collection, parentFolderId || '');
+  if (!list) return null;
+  const folder = { kind: 'folder', id: RelayCore.newId(), name: 'New folder', items: [] };
+  list.push(folder);
+  if (parentFolderId) ui.collapsed.delete(parentFolderId);
+  ui.collapsed.delete(collectionId);
+  ui.editing = { kind: 'folder', id: folder.id };
+  renderSidebarList();
+  scheduleSave();
+  return folder;
+}
+
 function addCollection(name, { edit = false } = {}) {
-  const collection = { id: RelayCore.newId(), name: name || 'New collection', requests: [] };
+  const collection = { id: RelayCore.newId(), name: name || 'New collection', items: [] };
   state.collections.push(collection);
   if (edit) ui.editing = { kind: 'collection', id: collection.id };
   scheduleSave();
@@ -1423,7 +1687,7 @@ function saveInPlace() {
     return;
   }
   const collection = findCollection(tab.loaded.collectionId);
-  const request = collection?.requests.find((item) => item.id === tab.loaded.requestId);
+  const request = findRequest(tab.loaded.collectionId, tab.loaded.requestId);
   if (!collection || !request) {
     tab.loaded = null;
     state.loaded = null;
@@ -1449,12 +1713,27 @@ function openSaveModal() {
   for (const collection of state.collections) select.append(new Option(collection.name, collection.id));
   if (tab.loaded?.collectionId) select.value = tab.loaded.collectionId;
   const created = el('input', { id: 'modal-new-collection', 'data-testid': 'modal-new-collection', placeholder: 'New collection name', spellcheck: 'false' });
+  const folderSelect = el('select', { id: 'modal-folder', 'data-testid': 'modal-folder' });
+  const folderField = field('Folder', folderSelect);
+  const fillFolders = () => {
+    const collection = findCollection(select.value);
+    folderSelect.replaceChildren();
+    for (const option of folderChoices(collection)) folderSelect.append(new Option(option.label, option.id));
+    const currentFolder = collection && tab.loaded?.collectionId === collection.id
+      ? folderIdOfRequest(collection, tab.loaded.requestId)
+      : '';
+    if ([...folderSelect.options].some((option) => option.value === currentFolder)) folderSelect.value = currentFolder;
+    folderField.hidden = folderSelect.options.length < 2;
+  };
+  select.addEventListener('change', fillFolders);
+  fillFolders();
   const error = el('p', { class: 'form-error' });
   openModal({
     title: 'Save request',
     body: el('div', {},
       field('Request name', name),
       state.collections.length ? field('Collection', select) : null,
+      state.collections.length ? folderField : null,
       field('Or create a collection', created),
       error,
     ),
@@ -1467,10 +1746,16 @@ function openSaveModal() {
         error.textContent = 'Choose a collection or enter a new name.';
         return false;
       }
+      const list = newName ? collection.items : parentList(collection, folderSelect.value);
+      if (!list) {
+        error.textContent = 'That folder is no longer available.';
+        return false;
+      }
       tab.draft.name = requestName;
       document.getElementById('request-name').value = requestName;
       const request = { id: RelayCore.newId(), ...RelayCore.normalizeRequest(tab.draft) };
-      collection.requests.push(request);
+      list.push(request);
+      if (!newName && folderSelect.value) ui.collapsed.delete(folderSelect.value);
       tab.loaded = { collectionId: collection.id, requestId: request.id };
       state.loaded = tab.loaded;
       tab.savedSignature = signatureOf(tab.draft);
@@ -1485,22 +1770,21 @@ function openSaveModal() {
 
 function duplicateRequest(collectionId, requestId) {
   const collection = findCollection(collectionId);
-  const request = collection?.requests.find((item) => item.id === requestId);
-  if (!request) return;
-  const index = collection.requests.indexOf(request);
-  const copy = withFreshRowIds(RelayCore.normalizeRequest(request));
-  copy.name = `${request.name} copy`;
+  const located = collection ? locateRequest(collection, requestId) : null;
+  if (!located) return;
+  const copy = withFreshRowIds(RelayCore.normalizeRequest(located.item));
+  copy.name = `${located.item.name} copy`;
   const created = { id: RelayCore.newId(), ...copy };
-  collection.requests.splice(index + 1, 0, created);
+  located.items.splice(located.index + 1, 0, created);
   openRequestTab(collection.id, created.id);
 }
 
 function deleteRequest(collectionId, requestId) {
   const collection = findCollection(collectionId);
-  const request = collection?.requests.find((item) => item.id === requestId);
-  if (!request) return;
-  if (!confirm(`Delete “${request.name}”?`)) return;
-  collection.requests = collection.requests.filter((item) => item.id !== requestId);
+  const located = collection ? locateRequest(collection, requestId) : null;
+  if (!located) return;
+  if (!confirm(`Delete “${located.item.name}”?`)) return;
+  located.items.splice(located.index, 1);
   const closed = closeTabsWhere((tab) => (
     tab.kind === 'request' && tab.loaded?.collectionId === collectionId && tab.loaded?.requestId === requestId
   ));
@@ -1508,9 +1792,88 @@ function deleteRequest(collectionId, requestId) {
   scheduleSave();
 }
 
+function requestIdsIn(items) {
+  const ids = [];
+  walkItems(items, (item) => {
+    ids.push(item.id);
+    return null;
+  });
+  return ids;
+}
+
+function deleteFolder(collectionId, folderId) {
+  const collection = findCollection(collectionId);
+  const folder = findFolder(collection, folderId);
+  if (!folder) return;
+  const noun = countRequests(folder.items) ? `folder “${folder.name}” and everything inside it` : `folder “${folder.name}”`;
+  if (!confirm(`Delete ${noun}?`)) return;
+  const removed = new Set(requestIdsIn(folder.items));
+  const parent = parentItemsOf(collection.items, folderId);
+  if (!parent) return;
+  parent.splice(parent.index, 1);
+  const closed = closeTabsWhere((tab) => (
+    tab.kind === 'request' && tab.loaded?.collectionId === collectionId && removed.has(tab.loaded.requestId)
+  ));
+  if (!closed) renderSidebarList();
+  scheduleSave();
+}
+
+function parentItemsOf(items, folderId) {
+  for (let index = 0; index < (items || []).length; index += 1) {
+    const item = items[index];
+    if (item?.kind !== 'folder') continue;
+    if (item.id === folderId) return { items, index };
+    const nested = parentItemsOf(item.items, folderId);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function duplicateFolder(collectionId, folderId) {
+  const collection = findCollection(collectionId);
+  const parent = parentItemsOf(collection?.items, folderId);
+  if (!parent) return;
+  const copy = cloneItems([parent.items[parent.index]])[0];
+  copy.name = `${parent.items[parent.index].name} copy`;
+  parent.items.splice(parent.index + 1, 0, copy);
+  ui.editing = null;
+  renderSidebarList();
+  scheduleSave();
+}
+
+function moveRequest(fromCollectionId, requestId, drop) {
+  const fromCollection = findCollection(fromCollectionId);
+  const toCollection = findCollection(drop?.collectionId);
+  if (!fromCollection || !toCollection) return false;
+  const from = locateRequest(fromCollection, requestId);
+  const destItems = parentList(toCollection, drop.parentFolderId || '');
+  if (!from || !destItems) return false;
+  let index = Number(drop.index);
+  if (!Number.isFinite(index)) index = destItems.length;
+  if (from.items === destItems && (index === from.index || index === from.index + 1)) return false;
+  const [request] = from.items.splice(from.index, 1);
+  if (from.items === destItems && from.index < index) index -= 1;
+  index = Math.max(0, Math.min(index, destItems.length));
+  destItems.splice(index, 0, request);
+  if (fromCollection.id !== toCollection.id) {
+    for (const tab of state.tabs) {
+      if (tab.kind === 'request' && tab.loaded?.collectionId === fromCollection.id && tab.loaded?.requestId === requestId) {
+        tab.loaded = { collectionId: toCollection.id, requestId };
+      }
+    }
+    if (state.loaded?.collectionId === fromCollection.id && state.loaded?.requestId === requestId) {
+      state.loaded = { collectionId: toCollection.id, requestId };
+    }
+  }
+  if (drop.parentFolderId) ui.collapsed.delete(drop.parentFolderId);
+  ui.collapsed.delete(toCollection.id);
+  scheduleSave();
+  return true;
+}
+
 function deleteCollection(id) {
   const collection = findCollection(id);
-  if (!collection || !confirm(`Delete “${collection.name}” and its requests?`)) return;
+  if (!collection || !confirm(`Delete “${collection.name}” and everything in it?`)) return;
   state.collections = state.collections.filter((item) => item.id !== id);
   const closed = closeTabsWhere((tab) => tab.kind === 'request' && tab.loaded?.collectionId === id);
   if (!closed) renderSidebarList();
@@ -1523,10 +1886,7 @@ function duplicateCollection(id) {
   state.collections.push({
     id: RelayCore.newId(),
     name: `${collection.name} copy`,
-    requests: collection.requests.map((request) => ({
-      id: RelayCore.newId(),
-      ...withFreshRowIds(RelayCore.normalizeRequest(request)),
-    })),
+    items: cloneItems(collection.items),
   });
   renderSidebarList();
   scheduleSave();
@@ -1756,9 +2116,9 @@ function mergeWorkspace(workspace) {
   }
   for (const collection of incoming.collections) {
     state.collections.push({
-      ...collection,
       id: RelayCore.newId(),
-      requests: collection.requests.map((request) => ({ ...request, id: RelayCore.newId() })),
+      name: collection.name,
+      items: cloneItems(collection.items),
     });
   }
   state.history = [...incoming.history, ...state.history].slice(0, 50);
@@ -1784,7 +2144,12 @@ async function onImport() {
     return;
   }
   if (imported.kind === 'postman-collection') {
-    state.collections.push(imported.collection);
+    const collection = RelayCore.sanitizeCollection(imported.collection);
+    if (!collection) {
+      flash('That collection could not be imported.', 'error');
+      return;
+    }
+    state.collections.push(collection);
     ui.side = 'collections';
     paintSideSwitch();
     renderSidebarList();
@@ -1863,7 +2228,25 @@ function handleSideAction(action) {
       duplicateCollection(collectionId);
       break;
     case 'add-request':
-      addBlankRequest(collectionId);
+      addBlankRequest(collectionId, action.dataset.folderId || '');
+      break;
+    case 'add-folder':
+      addFolder(collectionId, action.dataset.folderId || '');
+      break;
+    case 'toggle-folder':
+      if (ui.collapsed.has(action.dataset.folderId)) ui.collapsed.delete(action.dataset.folderId);
+      else ui.collapsed.add(action.dataset.folderId);
+      renderSidebarList();
+      break;
+    case 'rename-folder':
+      ui.editing = { kind: 'folder', id: action.dataset.folderId };
+      renderSidebarList();
+      break;
+    case 'duplicate-folder':
+      duplicateFolder(collectionId, action.dataset.folderId);
+      break;
+    case 'delete-folder':
+      deleteFolder(collectionId, action.dataset.folderId);
       break;
     case 'rename-request':
       ui.editing = { kind: 'request', id: requestId };
@@ -1923,6 +2306,12 @@ function onSideInput(event) {
     scheduleSave();
     return;
   }
+  if (field === 'folder-name') {
+    const folder = findFolder(findCollection(target.dataset.collectionId), target.dataset.folderId);
+    if (folder) folder.name = target.value;
+    scheduleSave();
+    return;
+  }
   if (field === 'request-name') {
     const request = findRequest(target.dataset.collectionId, target.dataset.requestId);
     if (request) request.name = target.value;
@@ -1974,12 +2363,192 @@ function onSideInput(event) {
 
 function commitEditing(event) {
   const field = event.target?.dataset?.field;
-  if (!ui.editing || !['collection-name', 'request-name', 'env-name'].includes(field)) return;
+  if (!ui.editing || !['collection-name', 'request-name', 'folder-name', 'env-name'].includes(field)) return;
   setTimeout(() => {
     if (!ui.editing) return;
     ui.editing = null;
     renderSidebarList();
   }, 0);
+}
+
+function clearRequestDropMarkers() {
+  document.querySelectorAll('.is-drop-before, .is-drop-after, .is-drop-into').forEach((node) => {
+    node.classList.remove('is-drop-before', 'is-drop-after', 'is-drop-into');
+  });
+}
+
+function onRequestPointerDown(event) {
+  if (requestDrag || tabDrag || event.button !== 0) return;
+  const origin = event.target instanceof Element ? event.target : event.target?.parentElement;
+  if (!origin || origin.closest('button, input, textarea, select')) return;
+  const row = origin.closest('#side-list .request-item');
+  if (!row) return;
+  requestDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    moved: false,
+    el: row,
+    collectionId: row.dataset.collectionId,
+    requestId: row.dataset.requestId,
+    drop: null,
+    scrollFrame: 0,
+  };
+  window.addEventListener('pointermove', onRequestPointerMove);
+  window.addEventListener('pointerup', onRequestPointerEnd);
+  window.addEventListener('pointercancel', onRequestPointerEnd);
+}
+
+function onRequestPointerMove(event) {
+  if (!requestDrag || event.pointerId !== requestDrag.pointerId) return;
+  requestDrag.clientX = event.clientX;
+  requestDrag.clientY = event.clientY;
+  if (!requestDrag.moved) {
+    const dx = event.clientX - requestDrag.startX;
+    const dy = event.clientY - requestDrag.startY;
+    if (dx * dx + dy * dy < 16) return;
+    requestDrag.moved = true;
+    requestDrag.el.classList.add('is-dragging');
+    document.body.classList.add('is-request-dragging');
+    const step = () => {
+      if (!requestDrag?.moved) return;
+      nudgeRequestScroll();
+      updateRequestDrop(requestDrag.clientX, requestDrag.clientY);
+      requestDrag.scrollFrame = requestAnimationFrame(step);
+    };
+    requestDrag.scrollFrame = requestAnimationFrame(step);
+  }
+  updateRequestDrop(event.clientX, event.clientY);
+  event.preventDefault();
+}
+
+function nudgeRequestScroll() {
+  const scroller = document.getElementById('side-list');
+  if (!scroller || requestDrag?.clientY == null) return;
+  const bounds = scroller.getBoundingClientRect();
+  const edge = 28;
+  if (requestDrag.clientY < bounds.top + edge) scroller.scrollTop -= 12;
+  else if (requestDrag.clientY > bounds.bottom - edge) scroller.scrollTop += 12;
+}
+
+function smallestRowHit(selector, x, y) {
+  let best = null;
+  let bestArea = Infinity;
+  for (const node of document.querySelectorAll(selector)) {
+    if (node.classList.contains('is-dragging')) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+    const area = rect.width * rect.height;
+    if (area < bestArea) {
+      best = { node, rect };
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
+function updateRequestDrop(x, y) {
+  clearRequestDropMarkers();
+  requestDrag.drop = null;
+  const dragged = requestDrag.el.getBoundingClientRect();
+  if (x >= dragged.left && x <= dragged.right && y >= dragged.top && y <= dragged.bottom) return;
+  const row = smallestRowHit('#side-list .request-item, #side-list .folder-head', x, y);
+  if (row?.node.classList.contains('request-item')) {
+    const before = y < row.rect.top + row.rect.height / 2;
+    row.node.classList.add(before ? 'is-drop-before' : 'is-drop-after');
+    requestDrag.drop = {
+      collectionId: row.node.dataset.collectionId,
+      parentFolderId: row.node.dataset.parentFolderId || '',
+      index: before ? Number(row.node.dataset.index) : Number(row.node.dataset.index) + 1,
+    };
+    return;
+  }
+  if (row?.node.classList.contains('folder-head')) {
+    const ratio = (y - row.rect.top) / Math.max(row.rect.height, 1);
+    const node = row.node;
+    if (ratio < 0.28) {
+      node.classList.add('is-drop-before');
+      requestDrag.drop = {
+        collectionId: node.dataset.collectionId,
+        parentFolderId: node.dataset.parentFolderId || '',
+        index: Number(node.dataset.index),
+      };
+    } else if (ratio > 0.72) {
+      node.classList.add('is-drop-after');
+      requestDrag.drop = {
+        collectionId: node.dataset.collectionId,
+        parentFolderId: node.dataset.parentFolderId || '',
+        index: Number(node.dataset.index) + 1,
+      };
+    } else {
+      node.classList.add('is-drop-into');
+      const folder = findFolder(findCollection(node.dataset.collectionId), node.dataset.folderId);
+      requestDrag.drop = {
+        collectionId: node.dataset.collectionId,
+        parentFolderId: node.dataset.folderId,
+        index: (folder?.items || []).length,
+      };
+    }
+    return;
+  }
+  const zone = smallestRowHit('#side-list .folder-body, #side-list .collection-body, #side-list .collection-head', x, y);
+  if (!zone) return;
+  if (zone.node.classList.contains('collection-head')) {
+    const collectionId = zone.node.closest('.collection')?.dataset.collectionId;
+    const collection = findCollection(collectionId);
+    if (!collection) return;
+    zone.node.classList.add('is-drop-into');
+    requestDrag.drop = {
+      collectionId,
+      parentFolderId: '',
+      index: (collection.items || []).length,
+    };
+    return;
+  }
+  zone.node.classList.add('is-drop-into');
+  requestDrag.drop = {
+    collectionId: zone.node.dataset.collectionId,
+    parentFolderId: zone.node.dataset.dropParent || '',
+    index: Number(zone.node.dataset.dropIndex || 0),
+  };
+}
+
+function onRequestPointerEnd(event) {
+  finishRequestDrag(event, event.type === 'pointercancel');
+}
+
+function finishRequestDrag(event, restore) {
+  if (!requestDrag) return;
+  if (event && event.pointerId !== requestDrag.pointerId) return;
+  const session = requestDrag;
+  requestDrag = null;
+  window.removeEventListener('pointermove', onRequestPointerMove);
+  window.removeEventListener('pointerup', onRequestPointerEnd);
+  window.removeEventListener('pointercancel', onRequestPointerEnd);
+  cancelAnimationFrame(session.scrollFrame);
+  clearRequestDropMarkers();
+  session.el.classList.remove('is-dragging');
+  document.body.classList.remove('is-request-dragging');
+  const moved = !restore && session.moved && session.drop
+    ? moveRequest(session.collectionId, session.requestId, session.drop)
+    : false;
+  if (session.moved) {
+    const swallow = (clickEvent) => {
+      clickEvent.preventDefault();
+      clickEvent.stopPropagation();
+      document.removeEventListener('click', swallow, true);
+    };
+    document.addEventListener('click', swallow, true);
+    setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+  }
+  if (moved || sideListNeedRender) {
+    sideListNeedRender = false;
+    renderSidebarList();
+    if (moved) paintCrumb();
+  }
 }
 
 function bindEvents() {
@@ -2009,6 +2578,7 @@ function bindEvents() {
     renderSidebarList();
   });
   const sideList = document.getElementById('side-list');
+  sideList.addEventListener('pointerdown', onRequestPointerDown);
   sideList.addEventListener('click', (event) => {
     const action = event.target.closest('[data-action]');
     if (action) {
@@ -2161,6 +2731,11 @@ function bindEvents() {
   splitter.addEventListener('dblclick', () => { requestPane.style.flexBasis = '48%'; });
   document.addEventListener('keydown', (event) => {
     const typing = event.target.matches('input, textarea, select');
+    if (event.key === 'Escape' && requestDrag) {
+      event.preventDefault();
+      finishRequestDrag(null, true);
+      return;
+    }
     if (event.key === 'Escape' && tabDrag) {
       event.preventDefault();
       finishTabDrag(null, true);
@@ -2210,7 +2785,7 @@ window.__relay = {
   snapshot: () => ({
     collections: state.collections.map((collection) => ({
       name: collection.name,
-      requests: collection.requests.map((request) => request.name),
+      requests: flatRequests(collection).map((request) => request.name),
     })),
     environments: state.environments.map((env) => env.name),
     active: activeEnvironment()?.name || null,

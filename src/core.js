@@ -727,20 +727,56 @@ function applyParamsToUrl(url, params) {
     })).filter((row) => row.key || row.value);
   }
 
-  function sanitizeCollection(collection) {
-    if (!collection || typeof collection !== 'object') return null;
-    const requests = [];
-    for (const request of collection.requests || []) {
+  function sanitizeItems(items, seen, depth) {
+    if (!Array.isArray(items) || depth > 8) return [];
+    const out = [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      if (item.kind === 'folder') {
+        let id = String(item.id || newId());
+        if (seen.has(id)) id = newId();
+        seen.add(id);
+        out.push({
+          kind: 'folder',
+          id,
+          name: String(item.name || 'Folder').slice(0, 160),
+          items: sanitizeItems(item.items, seen, depth + 1),
+        });
+        continue;
+      }
       try {
-        requests.push({ id: String(request.id || newId()), ...normalizeRequest(request) });
+        let id = String(item.id || newId());
+        if (seen.has(id)) id = newId();
+        seen.add(id);
+        out.push({ id, ...normalizeRequest(item) });
       } catch {
         // Skip a broken request and keep the rest of the collection.
       }
     }
+    return out;
+  }
+
+  function collectionHasRequest(collection, requestId) {
+    const stack = [...(Array.isArray(collection?.items) ? collection.items : (collection?.requests || []))];
+    while (stack.length) {
+      const item = stack.pop();
+      if (!item || typeof item !== 'object') continue;
+      if (item.kind === 'folder') {
+        stack.push(...(item.items || []));
+        continue;
+      }
+      if (String(item.id) === requestId) return true;
+    }
+    return false;
+  }
+
+  function sanitizeCollection(collection) {
+    if (!collection || typeof collection !== 'object') return null;
+    const source = Array.isArray(collection.items) ? collection.items : (collection.requests || []);
     return {
       id: String(collection.id || newId()),
       name: String(collection.name || 'Collection').slice(0, 160),
-      requests,
+      items: sanitizeItems(source, new Set(), 0),
     };
   }
 
@@ -796,7 +832,7 @@ function applyParamsToUrl(url, params) {
     const collectionId = String(loaded.collectionId);
     const requestId = String(loaded.requestId);
     const collection = collections.find((item) => item.id === collectionId);
-    if (!collection || !collection.requests.some((request) => request.id === requestId)) return null;
+    if (!collection || !collectionHasRequest(collection, requestId)) return null;
     return { collectionId, requestId };
   }
 
@@ -942,6 +978,7 @@ function applyParamsToUrl(url, params) {
     detectImport,
     readImported,
     sanitizeWorkspace,
+    sanitizeCollection,
     createSampleWorkspace,
   };
 

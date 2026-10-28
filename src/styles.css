@@ -103,7 +103,12 @@ button { cursor: pointer; }
   background: transparent;
   color: var(--muted);
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
+.glyph { width: 14px; height: 14px; display: block; }
 .icon-btn:hover { background: #2a3140; color: var(--text); }
 .icon-btn.danger:hover { color: var(--red); }
 
@@ -130,6 +135,26 @@ button { cursor: pointer; }
 .side-list { overflow: auto; min-height: 0; padding-bottom: 12px; }
 
 .collection { margin: 0 8px 8px; }
+.folder { margin: 1px 0 1px 10px; }
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px 3px 2px;
+  border-radius: 7px;
+}
+.folder-head:hover { background: #1b212b; }
+.folder-name {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.folder-empty, .collection-body > .hint { padding: 2px 8px 6px 28px; }
+.folder-body { min-height: 8px; }
 .collection-head, .env-head, .request-item, .history-item {
   display: flex;
   align-items: center;
@@ -154,15 +179,27 @@ button { cursor: pointer; }
   padding: 5px 6px;
   color: var(--text);
 }
+.request-item { cursor: grab; user-select: none; }
 .request-item:hover, .history-item:hover { background: #1b212b; }
 .request-item.is-active { background: #2a2418; }
 .request-item.is-open { box-shadow: inset 2px 0 0 var(--amber); }
+.request-item.is-dragging { opacity: 0.45; }
+.request-item.is-drop-before, .folder-head.is-drop-before { box-shadow: inset 0 2px 0 var(--amber); }
+.request-item.is-drop-after, .folder-head.is-drop-after { box-shadow: inset 0 -2px 0 var(--amber); }
+.folder-head.is-drop-into, .collection-head.is-drop-into,
+.folder-body.is-drop-into, .collection-body.is-drop-into {
+  background: #2a2418;
+  box-shadow: inset 0 0 0 1px var(--amber);
+}
+body.is-request-dragging, body.is-request-dragging .request-item { cursor: grabbing; user-select: none; }
 .request-label { flex: 1; }
 .row-actions { display: flex; margin-left: auto; opacity: 0; }
 .request-item:hover .row-actions,
 .request-item:focus-within .row-actions,
 .request-item.is-active .row-actions,
 .collection-head:hover .row-actions,
+.folder-head:hover .row-actions,
+.folder-head:focus-within .row-actions,
 .env-head:hover .row-actions,
 .env-head:focus-within .row-actions { opacity: 1; }
 .verb {

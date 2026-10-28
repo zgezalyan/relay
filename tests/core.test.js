@@ -233,6 +233,54 @@ test('open tabs are restored and broken links are dropped', () => {
   assert.deepEqual(again.tabs.map((tab) => tab.id), clean.tabs.map((tab) => tab.id));
   assert.equal(again.activeTabId, clean.activeTabId);
 
+  const flat = RelayCore.sanitizeWorkspace({
+    collections: [{
+      id: 'col-legacy',
+      name: 'Legacy',
+      requests: [
+        { id: 'req-a', name: 'Alpha', method: 'GET', url: 'http://example.test/a' },
+        { id: 'req-b', name: 'Beta', method: 'POST', url: 'http://example.test/b' },
+      ],
+    }],
+  });
+  assert.deepEqual(flat.collections[0].items.map((item) => item.name), ['Alpha', 'Beta']);
+
+  const nested = RelayCore.sanitizeWorkspace({
+    collections: [{
+      id: 'col',
+      name: 'Demo',
+      items: [
+        { id: 'req-root', name: 'Root', method: 'GET', url: 'http://example.test/root' },
+        {
+          kind: 'folder',
+          id: 'folder-1',
+          name: 'Auth',
+          items: [
+            { id: 'req-login', name: 'Login', method: 'POST', url: 'http://example.test/login' },
+            {
+              kind: 'folder',
+              id: 'folder-2',
+              name: 'Nested',
+              items: [{ id: 'req-deep', name: 'Deep', method: 'GET', url: 'http://example.test/deep' }],
+            },
+          ],
+        },
+      ],
+    }],
+    tabs: [{
+      id: 'tab-deep',
+      kind: 'request',
+      draft: { name: 'Deep', method: 'GET', url: 'http://example.test/deep' },
+      loaded: { collectionId: 'col', requestId: 'req-deep' },
+    }],
+  });
+  assert.equal(nested.collections[0].items[1].name, 'Auth');
+  assert.equal(nested.collections[0].items[1].items[1].items[0].name, 'Deep');
+  assert.deepEqual(nested.tabs[0].loaded, { collectionId: 'col', requestId: 'req-deep' });
+  const roundTrip = RelayCore.sanitizeWorkspace(nested);
+  assert.equal(roundTrip.collections[0].items[1].items[0].id, 'req-login');
+  assert.equal(roundTrip.tabs[0].loaded.requestId, 'req-deep');
+
   const closed = RelayCore.sanitizeWorkspace({ tabs: [], draft: { name: 'Ignored', url: 'http://example.test' }, collections: [], environments: [] });
   assert.deepEqual(closed.tabs, []);
   assert.equal(closed.activeTabId, null);
